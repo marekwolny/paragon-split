@@ -8,7 +8,8 @@ let sessionId = null;
 let session = null;
 let people = [];
 let items = [];
-let assignments = []; // {item_id, person_id}
+let assignments = []; // {item_id, person_id, shares}
+let payments = []; // {session_id, person_id, amount}
 let renderPending = false;
 
 const $ = (id) => document.getElementById(id);
@@ -51,17 +52,19 @@ async function createSession() {
 
 // ---------- dane ----------
 async function loadAll() {
-  const [s, p, i, a] = await Promise.all([
+  const [s, p, i, a, pay] = await Promise.all([
     db.from('sessions').select('*').eq('id', sessionId).single(),
     db.from('people').select('*').eq('session_id', sessionId).order('created_at'),
     db.from('items').select('*').eq('session_id', sessionId).order('position').order('created_at'),
     db.from('assignments').select('*').eq('session_id', sessionId),
+    db.from('payments').select('*').eq('session_id', sessionId),
   ]);
   if (s.error) { toast('Nie znaleziono sesji'); return; }
   session = s.data;
   people = p.data || [];
   items = i.data || [];
   assignments = a.data || [];
+  payments = pay.data || [];
   render();
 }
 
@@ -72,6 +75,7 @@ function subscribeRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'people', filter: `session_id=eq.${sessionId}` }, reload)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'assignments', filter: `session_id=eq.${sessionId}` }, reload)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sessions', filter: `id=eq.${sessionId}` }, reload)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'payments', filter: `session_id=eq.${sessionId}` }, reload)
     .subscribe();
 }
 
@@ -175,6 +179,25 @@ async function bumpShares(itemId, personId) {
   loadAll();
 }
 
+// ---------- kto zaplacil ----------
+async function togglePayer(personId) {
+  const exists = payments.some(x => x.person_id === personId);
+  if (exists) {
+    await db.from('payments').delete().eq('session_id', sessionId).eq('person_id', personId);
+  } else {
+    const t = computeTotals();
+    const paidSoFar = payments.reduce((s, x) => s + (Number(x.amount) || 0), 0);
+    const remaining = Math.max(0, Math.round((t.grand - paidSoFar) * 100) / 100);
+    await db.from('payments').insert({ session_id: sessionId, person_id: personId, amount: remaining });
+  }
+  loadAll();
+}
+
+const savePayment = debounce(async (personId, amount) => {
+  await db.from('payments').update({ amount }).eq('session_id', sessionId).eq('person_id', personId);
+  loadAll();
+}, 600);
+
 // ---------- zdjęcie -> Gemini ----------
 async function onPhoto(e) {
   const file = e.target.files[0];
@@ -244,7 +267,7 @@ function downscale(file) {
 function render() {
   // nie nadpisuj, gdy ktoś właśnie edytuje pole
   const ae = document.activeElement;
-  if (ae && ae.tagName === 'INPUT' && ae.closest('#items-list')) {
+  if (ae && ae.tagName === 'INPUT' && (ae.closest('#items-list') || ae.closest('#payer-rows'))) {
     if (!renderPending) {
       renderPending = true;
       ae.addEventListener('blur', () => { renderPending = false; render(); }, { once: true });
@@ -256,6 +279,7 @@ function render() {
   renderReceipts();
   renderItems();
   renderTip();
+  renderPayers();
   renderSummary();
 }
 
@@ -379,10 +403,8 @@ function renderTip() {
   $('tip-equal').classList.toggle('active', session.tip_mode === 'equal');
 }
 
-function renderSummary() {
-  const box = $('summary');
-  box.innerHTML = '';
-
+// oblicza koszty pozycji + napiwek per osoba
+function computeTotals() {
   const shares = {}; // person_id -> kwota z pozycji
   for (const p of people) shares[p.id] = 0;
 
@@ -399,11 +421,8 @@ function renderSummary() {
   const assignedTotal = itemsTotal - unassignedSum;
   const tip = Number(session.tip) || 0;
 
-  if (!people.length || !items.length) {
-    box.innerHTML = '<p class="muted small">Dodaj osoby i pozycje, aby zobaczyć podział.</p>';
-    return;
-  }
-
+  const owed = {}; // person_id -> laczna kwota do zaplaty (pozycje + napiwek)
+  const tipShares = {};
   let grand = 0;
   for (const p of people) {
     let tipShare = 0;
@@ -412,25 +431,135 @@ function renderSummary() {
         ? tip / people.length
         : (assignedTotal > 0 ? (shares[p.id] / assignedTotal) * tip : tip / people.length);
     }
-    const totalP = shares[p.id] + tipShare;
-    grand += totalP;
+    owed[p.id] = shares[p.id] + tipShare;
+    tipShares[p.id] = tipShare;
+    grand += owed[p.id];
+  }
+  return { shares, tipShares, owed, grand, unassignedSum, tip };
+}
 
+function renderPayers() {
+  const chipsBox = $('payer-chips');
+  const rowsBox = $('payer-rows');
+  if (!chipsBox || !rowsBox) return;
+  chipsBox.innerHTML = '';
+  rowsBox.innerHTML = '';
+
+  if (!people.length) {
+    chipsBox.innerHTML = '<span class="muted small">Najpierw dodaj osoby</span>';
+    return;
+  }
+
+  for (const p of people) {
+    const isPayer = payments.some(x => x.person_id === p.id);
+    const chip = document.createElement('button');
+    chip.className = 'chip assignable' + (isPayer ? ' on' : '');
+    chip.textContent = p.name;
+    chip.onclick = () => togglePayer(p.id);
+    chipsBox.appendChild(chip);
+  }
+
+  for (const pay of payments) {
+    const person = people.find(p => p.id === pay.person_id);
+    if (!person) continue;
+    const row = document.createElement('div');
+    row.className = 'row payer-row';
+    const label = document.createElement('span');
+    label.className = 'payer-name';
+    label.textContent = person.name;
+    const input = mkInput('number', Math.round((Number(pay.amount) || 0) * 100) / 100, 'i-price');
+    input.min = 0; input.step = 0.01; input.inputMode = 'decimal';
+    input.oninput = () => savePayment(pay.person_id, Math.max(0, Number(input.value) || 0));
+    const zl = document.createElement('span');
+    zl.textContent = 'zł';
+    row.append(label, input, zl);
+    rowsBox.appendChild(row);
+  }
+}
+
+function renderSummary() {
+  const box = $('summary');
+  const setBox = $('settlement');
+  box.innerHTML = '';
+  if (setBox) setBox.innerHTML = '';
+
+  if (!people.length || !items.length) {
+    box.innerHTML = '<p class="muted small">Dodaj osoby i pozycje, aby zobaczyć podział.</p>';
+    return;
+  }
+
+  const t = computeTotals();
+
+  for (const p of people) {
     const row = document.createElement('div');
     row.className = 'summary-row';
-    row.innerHTML = `<span>${escapeHtml(p.name)}${tip > 0 ? `<span class="details">pozycje ${fmt(shares[p.id])} zł + napiwek ${fmt(tipShare)} zł</span>` : ''}</span><strong>${fmt(totalP)} zł</strong>`;
+    row.innerHTML = `<span>${escapeHtml(p.name)}${t.tip > 0 ? `<span class="details">pozycje ${fmt(t.shares[p.id])} zł + napiwek ${fmt(t.tipShares[p.id])} zł</span>` : ''}</span><strong>${fmt(t.owed[p.id])} zł</strong>`;
     box.appendChild(row);
   }
 
   const totalRow = document.createElement('div');
   totalRow.className = 'summary-row total';
-  totalRow.innerHTML = `<span>Razem</span><span>${fmt(grand)} zł</span>`;
+  totalRow.innerHTML = `<span>Razem</span><span>${fmt(t.grand)} zł</span>`;
   box.appendChild(totalRow);
 
-  if (unassignedSum > 0.005) {
+  if (t.unassignedSum > 0.005) {
     const w = document.createElement('p');
     w.className = 'warn';
-    w.textContent = `⚠️ Nieprzypisane pozycje: ${fmt(unassignedSum)} zł (nie wliczone do podziału)`;
+    w.textContent = `⚠️ Nieprzypisane pozycje: ${fmt(t.unassignedSum)} zł (nie wliczone do podziału)`;
     box.appendChild(w);
+  }
+
+  renderSettlement(t);
+}
+
+// kto komu ile oddaje (na podstawie wplat)
+function renderSettlement(t) {
+  const box = $('settlement');
+  if (!box || !payments.length) return;
+
+  const paid = {};
+  for (const p of people) paid[p.id] = 0;
+  for (const pay of payments) if (paid[pay.person_id] !== undefined) paid[pay.person_id] += Number(pay.amount) || 0;
+  const paidTotal = Object.values(paid).reduce((s, x) => s + x, 0);
+
+  const h = document.createElement('h3');
+  h.className = 'settle-title';
+  h.textContent = 'Rozliczenie';
+  box.appendChild(h);
+
+  if (Math.abs(paidTotal - t.grand) > 0.01) {
+    const info = document.createElement('p');
+    info.className = 'warn';
+    info.textContent = `⚠️ Wpłaty (${fmt(paidTotal)} zł) różnią się od rachunku (${fmt(t.grand)} zł) — popraw kwoty.`;
+    box.appendChild(info);
+  }
+
+  // net > 0: nadplacil (dostaje zwrot), net < 0: oddaje
+  const nets = people.map(p => ({ name: p.name, net: Math.round((paid[p.id] - t.owed[p.id]) * 100) / 100 }));
+  const debtors = nets.filter(x => x.net < -0.005).map(x => ({ ...x, net: -x.net })).sort((a, b) => b.net - a.net);
+  const creditors = nets.filter(x => x.net > 0.005).sort((a, b) => b.net - a.net);
+
+  if (!debtors.length) {
+    const ok = document.createElement('p');
+    ok.className = 'muted small';
+    ok.textContent = 'Wszystko rozliczone ✅';
+    box.appendChild(ok);
+    return;
+  }
+
+  let di = 0, ci = 0;
+  while (di < debtors.length && ci < creditors.length) {
+    const amount = Math.min(debtors[di].net, creditors[ci].net);
+    if (amount > 0.005) {
+      const row = document.createElement('div');
+      row.className = 'settle-row';
+      row.innerHTML = `<span>${escapeHtml(debtors[di].name)} → ${escapeHtml(creditors[ci].name)}</span><strong>${fmt(amount)} zł</strong>`;
+      box.appendChild(row);
+    }
+    debtors[di].net -= amount;
+    creditors[ci].net -= amount;
+    if (debtors[di].net <= 0.005) di++;
+    if (creditors[ci].net <= 0.005) ci++;
   }
 }
 
