@@ -17,19 +17,46 @@
 
 <header>
   <h1>🧾 ParagonSplit</h1>
-  <button id="btn-share" class="btn-small hidden">🔗 Udostępnij</button>
+  <div class="header-btns">
+    <button id="btn-install" class="btn-small hidden">📲 Zainstaluj</button>
+    <button id="btn-share" class="btn-small hidden">🔗 Udostępnij</button>
+  </div>
 </header>
 
 <!-- EKRAN STARTOWY -->
 <main id="view-landing" class="hidden">
+  <div class="card" id="auth-box">
+    <div id="auth-logged-out">
+      <p class="muted small">Zaloguj się, aby tworzyć grupy wyjazdowe (dołączanie przez link nie wymaga konta).</p>
+      <button id="btn-login" class="btn-primary">Zaloguj przez Google</button>
+    </div>
+    <div id="auth-logged-in" class="hidden">
+      <div class="row space-between">
+        <span id="auth-email" class="small"></span>
+        <button id="btn-logout" class="btn-small">Wyloguj</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="groups-box">
+    <h2>🏕️ Grupy wyjazdowe</h2>
+    <div id="groups-list"></div>
+    <div class="row">
+      <input type="text" id="group-name" placeholder="Nazwa wyjazdu, np. Chorwacja 2026" maxlength="60">
+      <button id="btn-new-group" class="btn-small">Utwórz</button>
+    </div>
+  </div>
+
   <div class="card center">
-    <p>Podziel rachunek na podstawie zdjęcia paragonu.<br>Każdy zaznacza swoje pozycje na swoim telefonie.</p>
+    <p class="muted small">Szybki pojedynczy rachunek bez grupy i logowania:</p>
     <button id="btn-new" class="btn-primary">➕ Nowy rachunek</button>
   </div>
 </main>
 
 <!-- EKRAN SESJI -->
 <main id="view-session" class="hidden">
+
+  <div id="group-backlink" class="hidden"><a href="#" id="group-back-a">← wróć do grupy</a></div>
 
   <section class="card">
     <h2>1. Paragon</h2>
@@ -39,6 +66,20 @@
     </label>
     <div id="upload-status" class="muted"></div>
     <div id="receipt-thumbs" class="thumbs"></div>
+    <div class="row currency-row">
+      <label class="small muted" for="currency">Waluta:</label>
+      <select id="currency">
+        <option>PLN</option><option>EUR</option><option>USD</option><option>GBP</option>
+        <option>CZK</option><option>HUF</option><option>CHF</option><option>NOK</option>
+        <option>SEK</option><option>DKK</option><option>HRK</option><option>TRY</option>
+      </select>
+      <input type="number" id="fx-rate" min="0" step="0.0001" inputmode="decimal" class="hidden" title="Kurs">
+      <span id="fx-label" class="small muted hidden"></span>
+    </div>
+    <div class="row hidden" id="paid-base-row">
+      <label class="small muted" for="paid-base">Zapłacono łącznie w PLN (opcjonalnie, nadpisze kurs):</label>
+      <input type="number" id="paid-base" min="0" step="0.01" inputmode="decimal" placeholder="np. 430.50">
+    </div>
   </section>
 
   <section class="card">

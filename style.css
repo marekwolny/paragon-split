@@ -232,6 +232,52 @@ button {
 }
 .settle-row strong { color: var(--accent); }
 
+.header-btns { display: flex; gap: 6px; }
+.space-between { justify-content: space-between; }
+
+#group-backlink, #home-backlink { margin-bottom: 10px; }
+#group-backlink a, #home-backlink a { color: var(--accent); font-size: 14px; text-decoration: none; }
+
+.group-link {
+  display: block;
+  background: var(--accent-light);
+  color: var(--accent);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.receipt-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+  padding: 10px 0;
+}
+.receipt-row a { flex: 1; color: var(--text); text-decoration: none; }
+.receipt-row:last-of-type { border-bottom: none; }
+
+#btn-add-receipt { margin-top: 12px; }
+
+.amount-col { text-align: right; }
+.amount-col .details { text-align: right; }
+strong.neg { color: var(--danger); }
+strong.pos { color: #16a34a; }
+
+.currency-row { margin-top: 12px; flex-wrap: wrap; }
+.currency-row select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 16px;
+  background: var(--card);
+}
+.currency-row input { max-width: 110px; }
+
+#group-name-input { font-weight: 600; }
+
 #toast {
   position: fixed;
   bottom: 20px;

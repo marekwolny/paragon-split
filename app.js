@@ -25,15 +25,46 @@ function toast(msg, ms = 2500) {
 
 // ---------- start ----------
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+// przycisk instalacji PWA
+let deferredInstall = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstall = e;
+  const b = $('btn-install');
+  if (b) b.classList.remove('hidden');
+});
+function bindInstall() {
+  const b = $('btn-install');
+  if (!b) return;
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  if (isIos && !standalone) b.classList.remove('hidden');
+  b.onclick = async () => {
+    if (deferredInstall) {
+      deferredInstall.prompt();
+      await deferredInstall.userChoice;
+      deferredInstall = null;
+      b.classList.add('hidden');
+    } else if (isIos) {
+      toast('Safari: Udostępnij → „Dodaj do ekranu początkowego"', 5000);
+    } else {
+      toast('Menu przeglądarki → „Zainstaluj aplikację"', 4000);
+    }
+  };
+}
+
 init();
 
 async function init() {
+  bindInstall();
   const params = new URLSearchParams(location.search);
   sessionId = params.get('s');
 
   if (!sessionId) {
     $('view-landing').classList.remove('hidden');
     $('btn-new').onclick = createSession;
+    initLanding();
     return;
   }
 
@@ -44,28 +75,120 @@ async function init() {
   subscribeRealtime();
 }
 
-async function createSession() {
-  const { data, error } = await db.from('sessions').insert({}).select().single();
+async function createSession(groupId) {
+  const payload = groupId ? { group_id: groupId } : {};
+  const { data, error } = await db.from('sessions').insert(payload).select().single();
   if (error) return toast('Błąd: ' + error.message);
   location.search = '?s=' + data.id;
 }
 
+// ---------- landing: logowanie + grupy ----------
+async function initLanding() {
+  $('btn-login').onclick = async () => {
+    const { error } = await db.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin } });
+    if (error) toast('Błąd logowania: ' + error.message);
+  };
+  $('btn-logout').onclick = async () => { await db.auth.signOut(); renderAuth(null); };
+  $('btn-new-group').onclick = createGroup;
+  $('group-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') createGroup(); });
+
+  const { data: { user } } = await db.auth.getUser();
+  renderAuth(user);
+  db.auth.onAuthStateChange((_ev, sess) => renderAuth(sess ? sess.user : null));
+}
+
+let currentUser = null;
+async function renderAuth(user) {
+  currentUser = user;
+  $('auth-logged-out').classList.toggle('hidden', !!user);
+  $('auth-logged-in').classList.toggle('hidden', !user);
+  if (user) $('auth-email').textContent = '👤 ' + (user.email || 'zalogowano');
+  renderGroupsList();
+}
+
+function visitedGroups() {
+  try { return JSON.parse(localStorage.getItem('visitedGroups') || '[]'); } catch { return []; }
+}
+
+async function renderGroupsList() {
+  const box = $('groups-list');
+  box.innerHTML = '';
+  let mine = [];
+  if (currentUser) {
+    const { data } = await db.from('groups').select('id,name').eq('owner', currentUser.id).order('created_at', { ascending: false });
+    mine = data || [];
+  }
+  const seen = new Set(mine.map(g => g.id));
+  const visited = visitedGroups().filter(g => !seen.has(g.id));
+  const all = [...mine, ...visited];
+  if (!all.length) {
+    box.innerHTML = '<p class="muted small">Brak grup — utwórz pierwszą poniżej' + (currentUser ? '' : ' (wymaga zalogowania)') + '.</p>';
+    return;
+  }
+  for (const g of all) {
+    const a = document.createElement('a');
+    a.className = 'group-link';
+    a.href = 'group.html?g=' + g.id;
+    a.textContent = '🏕️ ' + g.name;
+    box.appendChild(a);
+  }
+}
+
+async function createGroup() {
+  if (!currentUser) return toast('Zaloguj się, aby utworzyć grupę');
+  const name = $('group-name').value.trim() || 'Wyjazd';
+  const { data, error } = await db.from('groups').insert({ name, owner: currentUser.id }).select().single();
+  if (error) return toast('Błąd: ' + error.message);
+  location.href = 'group.html?g=' + data.id;
+}
+
 // ---------- dane ----------
 async function loadAll() {
-  const [s, p, i, a, pay] = await Promise.all([
-    db.from('sessions').select('*').eq('id', sessionId).single(),
-    db.from('people').select('*').eq('session_id', sessionId).order('created_at'),
+  const s = await db.from('sessions').select('*').eq('id', sessionId).single();
+  if (s.error) { toast('Nie znaleziono sesji'); return; }
+  session = s.data;
+
+  const peopleQuery = session.group_id
+    ? db.from('people').select('*').eq('group_id', session.group_id).order('created_at')
+    : db.from('people').select('*').eq('session_id', sessionId).order('created_at');
+
+  const [p, i, a, pay] = await Promise.all([
+    peopleQuery,
     db.from('items').select('*').eq('session_id', sessionId).order('position').order('created_at'),
     db.from('assignments').select('*').eq('session_id', sessionId),
     db.from('payments').select('*').eq('session_id', sessionId),
   ]);
-  if (s.error) { toast('Nie znaleziono sesji'); return; }
-  session = s.data;
   people = p.data || [];
   items = i.data || [];
   assignments = a.data || [];
   payments = pay.data || [];
+
+  const back = $('group-backlink');
+  if (back && session.group_id) {
+    back.classList.remove('hidden');
+    $('group-back-a').href = 'group.html?g=' + session.group_id;
+  }
   render();
+}
+
+// waluta sesji + efektywny kurs PLN
+function cur() { return (session && session.currency) || 'PLN'; }
+function effectiveRate() {
+  if (cur() === 'PLN') return 1;
+  const totalItems = items.reduce((s, it) => s + it.qty * it.unit_price, 0);
+  const pb = Number(session.paid_base) || 0;
+  if (pb > 0 && totalItems > 0) return pb / totalItems;
+  return Number(session.fx_rate) || null;
+}
+const fmtC = (n) => fmt(n) + ' ' + (cur() === 'PLN' ? 'zł' : cur());
+
+async function fetchNbpRate(code) {
+  try {
+    const r = await fetch('https://api.nbp.pl/api/exchangerates/rates/a/' + code.toLowerCase() + '/?format=json');
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d.rates && d.rates[0] ? d.rates[0].mid : null;
+  } catch { return null; }
 }
 
 function subscribeRealtime() {
@@ -99,6 +222,45 @@ function bindUI() {
   $('tip-equal').onclick = () => setTipMode('equal');
   $('btn-expand-all').onclick = toggleAllDetails;
   $('btn-copy-summary').onclick = copySummary;
+
+  $('currency').addEventListener('change', async (e) => {
+    const c = e.target.value;
+    let patch = { currency: c };
+    if (c !== 'PLN') {
+      const mid = await fetchNbpRate(c);
+      if (mid) patch.fx_rate = mid;
+    } else {
+      patch.fx_rate = null;
+      patch.paid_base = null;
+    }
+    await db.from('sessions').update(patch).eq('id', sessionId);
+    loadAll();
+  });
+  $('fx-rate').addEventListener('change', async (e) => {
+    const v = Number(e.target.value) || null;
+    await db.from('sessions').update({ fx_rate: v }).eq('id', sessionId);
+    loadAll();
+  });
+  $('paid-base').addEventListener('change', async (e) => {
+    const v = Number(e.target.value) || null;
+    await db.from('sessions').update({ paid_base: v }).eq('id', sessionId);
+    loadAll();
+  });
+}
+
+function renderCurrency() {
+  const c = cur();
+  if (document.activeElement !== $('currency')) $('currency').value = c;
+  const foreign = c !== 'PLN';
+  $('fx-rate').classList.toggle('hidden', !foreign);
+  $('fx-label').classList.toggle('hidden', !foreign);
+  $('paid-base-row').classList.toggle('hidden', !foreign);
+  if (foreign) {
+    if (document.activeElement !== $('fx-rate')) $('fx-rate').value = session.fx_rate || '';
+    if (document.activeElement !== $('paid-base')) $('paid-base').value = session.paid_base || '';
+    const eff = effectiveRate();
+    $('fx-label').textContent = 'PLN za 1 ' + c + (Number(session.paid_base) > 0 && eff ? ` (kurs z wpłaty: ${eff.toFixed(4)})` : '');
+  }
 }
 
 function toggleAllDetails() {
@@ -114,8 +276,10 @@ function toggleAllDetails() {
 function buildSummaryText() {
   const t = computeTotals();
   const lines = ['🧾 Rozliczenie rachunku', ''];
+  const rate = effectiveRate();
   for (const p of people) {
-    lines.push(`${p.name} — do zapłaty ${fmt(t.owed[p.id])} zł`);
+    const plnTxt = cur() !== 'PLN' && rate ? ` (≈ ${fmt(t.owed[p.id] * rate)} zł)` : '';
+    lines.push(`${p.name} — do zapłaty ${fmtC(t.owed[p.id])}${plnTxt}`);
     for (const item of items) {
       const as = assignments.filter(a => a.item_id === item.id);
       const mine = as.find(a => a.person_id === p.id);
@@ -123,12 +287,12 @@ function buildSummaryText() {
       const totalSh = as.reduce((s, a) => s + (a.shares || 1), 0);
       const cost = item.qty * item.unit_price * (mine.shares || 1) / totalSh;
       const shareTxt = totalSh > 1 ? ` (${mine.shares || 1}/${totalSh})` : '';
-      lines.push(`  • ${item.name}${shareTxt}: ${fmt(cost)} zł`);
+      lines.push(`  • ${item.name}${shareTxt}: ${fmtC(cost)}`);
     }
-    if (t.tipShares[p.id] > 0.005) lines.push(`  • napiwek: ${fmt(t.tipShares[p.id])} zł`);
+    if (t.tipShares[p.id] > 0.005) lines.push(`  • napiwek: ${fmtC(t.tipShares[p.id])}`);
     lines.push('');
   }
-  lines.push(`Razem: ${fmt(t.grand)} zł`);
+  lines.push(`Razem: ${fmtC(t.grand)}${cur() !== 'PLN' && rate ? ` ≈ ${fmt(t.grand * rate)} zł (kurs ${rate.toFixed(4)})` : ''}`);
   if (t.unassignedSum > 0.005) lines.push(`⚠️ Nieprzypisane: ${fmt(t.unassignedSum)} zł`);
 
   if (payments.length) {
@@ -183,7 +347,8 @@ async function addPerson() {
   if (!name) return;
   if (people.some(p => p.name.toLowerCase() === name.toLowerCase())) return toast('Ta osoba już jest');
   $('person-name').value = '';
-  const { error } = await db.from('people').insert({ session_id: sessionId, name });
+  const payload = session && session.group_id ? { group_id: session.group_id, name } : { session_id: sessionId, name };
+  const { error } = await db.from('people').insert(payload);
   if (error) toast('Błąd: ' + error.message); else loadAll();
 }
 
@@ -342,6 +507,7 @@ function render() {
 
   renderPeople();
   renderReceipts();
+  renderCurrency();
   renderItems();
   renderTip();
   renderPayers();
@@ -414,7 +580,7 @@ function renderItems() {
 
     const total = document.createElement('span');
     total.className = 'item-total';
-    total.textContent = fmt(item.qty * item.unit_price) + ' zł';
+    total.textContent = fmtC(item.qty * item.unit_price);
 
     const del = document.createElement('button');
     del.className = 'btn-del';
@@ -536,7 +702,7 @@ function renderPayers() {
     input.min = 0; input.step = 0.01; input.inputMode = 'decimal';
     input.oninput = () => savePayment(pay.person_id, Math.max(0, Number(input.value) || 0));
     const zl = document.createElement('span');
-    zl.textContent = 'zł';
+    zl.textContent = cur() === 'PLN' ? 'zł' : cur();
     row.append(label, input, zl);
     rowsBox.appendChild(row);
   }
@@ -556,9 +722,11 @@ function renderSummary() {
   const t = computeTotals();
 
   for (const p of people) {
+    const rate = effectiveRate();
+    const plnTxt = cur() !== 'PLN' && rate ? `<span class="details">≈ ${fmt(t.owed[p.id] * rate)} zł</span>` : '';
     const row = document.createElement('div');
     row.className = 'summary-row clickable';
-    row.innerHTML = `<span><span class="chev">▸</span> ${escapeHtml(p.name)}${t.tip > 0 ? `<span class="details">pozycje ${fmt(t.shares[p.id])} zł + napiwek ${fmt(t.tipShares[p.id])} zł</span>` : ''}</span><strong>${fmt(t.owed[p.id])} zł</strong>`;
+    row.innerHTML = `<span><span class="chev">▸</span> ${escapeHtml(p.name)}${t.tip > 0 ? `<span class="details">pozycje ${fmtC(t.shares[p.id])} + napiwek ${fmtC(t.tipShares[p.id])}</span>` : ''}</span><span class="amount-col"><strong>${fmtC(t.owed[p.id])}</strong>${plnTxt}</span>`;
 
     // szczegoly: dokladna lista pozycji tej osoby
     const det = document.createElement('div');
@@ -571,9 +739,9 @@ function renderSummary() {
       const totalSh = as.reduce((s, a) => s + (a.shares || 1), 0);
       const cost = item.qty * item.unit_price * (mine.shares || 1) / totalSh;
       const shareTxt = totalSh > 1 ? ` <span class="muted">(${mine.shares || 1}/${totalSh} udz.)</span>` : '';
-      lines.push(`<div class="pd-row"><span>${escapeHtml(item.name)}${shareTxt}</span><span>${fmt(cost)} zł</span></div>`);
+      lines.push(`<div class="pd-row"><span>${escapeHtml(item.name)}${shareTxt}</span><span>${fmtC(cost)}</span></div>`);
     }
-    if (t.tipShares[p.id] > 0.005) lines.push(`<div class="pd-row"><span>Napiwek</span><span>${fmt(t.tipShares[p.id])} zł</span></div>`);
+    if (t.tipShares[p.id] > 0.005) lines.push(`<div class="pd-row"><span>Napiwek</span><span>${fmtC(t.tipShares[p.id])}</span></div>`);
     det.innerHTML = lines.join('') || '<div class="pd-row"><span class="muted">Brak przypisanych pozycji</span></div>';
 
     row.onclick = () => {
@@ -584,10 +752,17 @@ function renderSummary() {
     box.appendChild(det);
   }
 
+  const rateT = effectiveRate();
   const totalRow = document.createElement('div');
   totalRow.className = 'summary-row total';
-  totalRow.innerHTML = `<span>Razem</span><span>${fmt(t.grand)} zł</span>`;
+  totalRow.innerHTML = `<span>Razem</span><span class="amount-col"><span>${fmtC(t.grand)}</span>${cur() !== 'PLN' && rateT ? `<span class="details">≈ ${fmt(t.grand * rateT)} zł (kurs ${rateT.toFixed(4)})</span>` : ''}</span>`;
   box.appendChild(totalRow);
+  if (cur() !== 'PLN' && !rateT) {
+    const w = document.createElement('p');
+    w.className = 'warn';
+    w.textContent = '⚠️ Podaj kurs albo kwotę zapłaconą w PLN, aby przeliczyć na złotówki.';
+    box.appendChild(w);
+  }
 
   if (t.unassignedSum > 0.005) {
     const w = document.createElement('p');
@@ -617,7 +792,7 @@ function renderSettlement(t) {
   if (Math.abs(paidTotal - t.grand) > 0.01) {
     const info = document.createElement('p');
     info.className = 'warn';
-    info.textContent = `⚠️ Wpłaty (${fmt(paidTotal)} zł) różnią się od rachunku (${fmt(t.grand)} zł) — popraw kwoty.`;
+    info.textContent = `⚠️ Wpłaty (${fmtC(paidTotal)}) różnią się od rachunku (${fmtC(t.grand)}) — popraw kwoty.`;
     box.appendChild(info);
   }
 
@@ -640,7 +815,7 @@ function renderSettlement(t) {
     if (amount > 0.005) {
       const row = document.createElement('div');
       row.className = 'settle-row';
-      row.innerHTML = `<span>${escapeHtml(debtors[di].name)} → ${escapeHtml(creditors[ci].name)}</span><strong>${fmt(amount)} zł</strong>`;
+      row.innerHTML = `<span>${escapeHtml(debtors[di].name)} → ${escapeHtml(creditors[ci].name)}</span><strong>${fmtC(amount)}</strong>`;
       box.appendChild(row);
     }
     debtors[di].net -= amount;
