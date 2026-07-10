@@ -163,10 +163,12 @@ button {
 }
 
 .item-top { display: flex; gap: 6px; align-items: center; }
-.item-top input.i-name { flex: 1; }
-.item-top input.i-qty { width: 52px; text-align: center; }
-.item-top input.i-price { width: 78px; text-align: right; }
-.item-total { font-weight: 600; white-space: nowrap; font-size: 14px; }
+.item-top input.i-name { flex: 1; font-weight: 500; }
+
+.item-mid { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.item-mid input.i-qty { width: 60px; text-align: center; }
+.item-mid input.i-price { width: 95px; text-align: right; }
+.item-total { font-weight: 600; white-space: nowrap; font-size: 15px; margin-left: auto; }
 
 .btn-del {
   background: none;

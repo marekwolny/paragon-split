@@ -113,23 +113,27 @@ function visitedGroups() {
 async function renderGroupsList() {
   const box = $('groups-list');
   box.innerHTML = '';
-  let mine = [];
-  if (currentUser) {
-    const { data } = await db.from('groups').select('id,name').eq('owner', currentUser.id).order('created_at', { ascending: false });
-    mine = data || [];
+
+  // lista grup widoczna tylko po zalogowaniu
+  if (!currentUser) {
+    box.innerHTML = '<p class="muted small">Zaloguj się, aby zobaczyć swoje grupy. Do cudzej grupy dołączysz przez otrzymany link.</p>';
+    return;
   }
+
+  const { data } = await db.from('groups').select('id,name').eq('owner', currentUser.id).order('created_at', { ascending: false });
+  const mine = data || [];
   const seen = new Set(mine.map(g => g.id));
   const visited = visitedGroups().filter(g => !seen.has(g.id));
-  const all = [...mine, ...visited];
+  const all = [...mine, ...visited.map(v => ({ ...v, visited: true }))];
   if (!all.length) {
-    box.innerHTML = '<p class="muted small">Brak grup — utwórz pierwszą poniżej' + (currentUser ? '' : ' (wymaga zalogowania)') + '.</p>';
+    box.innerHTML = '<p class="muted small">Brak grup — utwórz pierwszą poniżej.</p>';
     return;
   }
   for (const g of all) {
     const a = document.createElement('a');
     a.className = 'group-link';
     a.href = 'group.html?g=' + g.id;
-    a.textContent = '🏕️ ' + g.name;
+    a.textContent = '🏕️ ' + g.name + (g.visited ? ' (dołączono z linku)' : '');
     box.appendChild(a);
   }
 }
@@ -564,30 +568,45 @@ function renderItems() {
     const div = document.createElement('div');
     div.className = 'item' + state;
 
+    // wiersz 1: nazwa + usun
     const top = document.createElement('div');
     top.className = 'item-top';
 
     const iName = mkInput('text', item.name, 'i-name');
     iName.oninput = () => saveItem(item.id, { name: iName.value });
 
-    const iQty = mkInput('number', item.qty, 'i-qty');
-    iQty.min = 1; iQty.step = 1;
-    iQty.oninput = () => saveItem(item.id, { qty: Math.max(1, Math.round(Number(iQty.value) || 1)) });
-
-    const iPrice = mkInput('number', item.unit_price, 'i-price');
-    iPrice.min = 0; iPrice.step = 0.01; iPrice.inputMode = 'decimal';
-    iPrice.oninput = () => saveItem(item.id, { unit_price: Math.max(0, Number(iPrice.value) || 0) });
-
-    const total = document.createElement('span');
-    total.className = 'item-total';
-    total.textContent = fmtC(item.qty * item.unit_price);
-
     const del = document.createElement('button');
     del.className = 'btn-del';
     del.textContent = '✕';
     del.onclick = () => removeItem(item.id);
 
-    top.append(iName, iQty, iPrice, total, del);
+    top.append(iName, del);
+
+    // wiersz 2: ilosc x cena = suma
+    const mid = document.createElement('div');
+    mid.className = 'item-mid';
+
+    const iQty = mkInput('number', item.qty, 'i-qty');
+    iQty.min = 1; iQty.step = 1;
+    iQty.oninput = () => saveItem(item.id, { qty: Math.max(1, Math.round(Number(iQty.value) || 1)) });
+
+    const x = document.createElement('span');
+    x.className = 'muted';
+    x.textContent = '×';
+
+    const iPrice = mkInput('number', item.unit_price, 'i-price');
+    iPrice.min = 0; iPrice.step = 0.01; iPrice.inputMode = 'decimal';
+    iPrice.oninput = () => saveItem(item.id, { unit_price: Math.max(0, Number(iPrice.value) || 0) });
+
+    const eq = document.createElement('span');
+    eq.className = 'muted';
+    eq.textContent = '=';
+
+    const total = document.createElement('span');
+    total.className = 'item-total';
+    total.textContent = fmtC(item.qty * item.unit_price);
+
+    mid.append(iQty, x, iPrice, eq, total);
 
     const actions = document.createElement('div');
     actions.className = 'item-actions chips';
@@ -615,7 +634,7 @@ function renderItems() {
       actions.appendChild(split);
     }
 
-    div.append(top, actions);
+    div.append(top, mid, actions);
     box.appendChild(div);
   }
 }

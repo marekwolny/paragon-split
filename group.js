@@ -69,9 +69,10 @@ async function init() {
 }
 
 async function loadAll() {
-  const g = await db.from('groups').select('*').eq('id', groupId).single();
-  if (g.error) { toast('Nie znaleziono grupy'); return; }
-  group = g.data;
+  // rpc: dostep po dokladnym ID (link = dostep), bez mozliwosci listowania cudzych grup
+  const g = await db.rpc('get_group', { gid: groupId });
+  if (g.error || !g.data || !g.data.length) { toast('Nie znaleziono grupy'); return; }
+  group = g.data[0];
 
   const [p, s] = await Promise.all([
     db.from('people').select('*').eq('group_id', groupId).order('created_at'),
