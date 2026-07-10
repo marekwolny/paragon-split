@@ -68,6 +68,17 @@ async function init() {
   $('btn-csv').onclick = exportCsv;
   $('btn-print').onclick = () => window.print();
   $('qe-add').onclick = addQuickExpense;
+  $('qe-currency').addEventListener('change', (e) => {
+    if (e.target.value !== '__other') return;
+    const code = (prompt('Podaj 3-literowy kod waluty (ISO), np. ALL dla albańskiego leka:') || '').trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(code)) { e.target.value = 'PLN'; return; }
+    if (![...e.target.options].some(o => o.value === code)) {
+      const o = document.createElement('option');
+      o.value = o.textContent = code;
+      e.target.insertBefore(o, e.target.querySelector('option[value="__other"]'));
+    }
+    e.target.value = code;
+  });
   $('group-name-input').addEventListener('input', debounce(async () => {
     await db.from('groups').update({ name: $('group-name-input').value.trim() || 'Wyjazd' }).eq('id', groupId);
   }, 600));
@@ -157,10 +168,17 @@ async function addQuickExpense() {
 
   let fx_rate = null;
   if (currency !== 'PLN') {
-    try {
-      const r = await fetch('https://api.nbp.pl/api/exchangerates/rates/a/' + currency.toLowerCase() + '/?format=json');
-      if (r.ok) { const d = await r.json(); fx_rate = d.rates && d.rates[0] ? d.rates[0].mid : null; }
-    } catch { /* brak kursu - uzupelnia sie w paragonie */ }
+    for (const table of ['a', 'b']) {
+      try {
+        const r = await fetch('https://api.nbp.pl/api/exchangerates/rates/' + table + '/' + currency.toLowerCase() + '/?format=json');
+        if (r.ok) { const d = await r.json(); if (d.rates && d.rates[0]) { fx_rate = d.rates[0].mid; break; } }
+      } catch { /* dalej */ }
+    }
+    if (!fx_rate) {
+      const manual = prompt('NBP nie podaje kursu ' + currency + '. Podaj kurs ręcznie (ile PLN za 1 ' + currency + '):');
+      const v = Number(String(manual || '').replace(',', '.'));
+      if (v > 0) fx_rate = v;
+    }
   }
 
   const { data: ses, error } = await db.from('sessions')

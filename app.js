@@ -187,12 +187,27 @@ function effectiveRate() {
 const fmtC = (n) => fmt(n) + ' ' + (cur() === 'PLN' ? 'zł' : cur());
 
 async function fetchNbpRate(code) {
-  try {
-    const r = await fetch('https://api.nbp.pl/api/exchangerates/rates/a/' + code.toLowerCase() + '/?format=json');
-    if (!r.ok) return null;
-    const d = await r.json();
-    return d.rates && d.rates[0] ? d.rates[0].mid : null;
-  } catch { return null; }
+  // tabela A (popularne) -> tabela B (egzotyczne, np. ALL - lek albanski)
+  for (const table of ['a', 'b']) {
+    try {
+      const r = await fetch('https://api.nbp.pl/api/exchangerates/rates/' + table + '/' + code.toLowerCase() + '/?format=json');
+      if (r.ok) {
+        const d = await r.json();
+        if (d.rates && d.rates[0]) return d.rates[0].mid;
+      }
+    } catch { /* dalej */ }
+  }
+  return null;
+}
+
+// dopisz walute do selecta, jesli jej nie ma
+function ensureCurrencyOption(sel, code) {
+  if (![...sel.options].some(o => o.value === code)) {
+    const o = document.createElement('option');
+    o.value = o.textContent = code;
+    const other = sel.querySelector('option[value="__other"]');
+    if (other) sel.insertBefore(o, other); else sel.appendChild(o);
+  }
 }
 
 function subscribeRealtime() {
@@ -240,7 +255,14 @@ function bindUI() {
   $('receipt-thumbs').insertAdjacentElement('afterend', aiBtn);
 
   $('currency').addEventListener('change', async (e) => {
-    const c = e.target.value;
+    let c = e.target.value;
+    if (c === '__other') {
+      const code = (prompt('Podaj 3-literowy kod waluty (ISO), np. ALL dla albańskiego leka, RSD dla dinara serbskiego:') || '').trim().toUpperCase();
+      if (!/^[A-Z]{3}$/.test(code)) { renderCurrency(); return; }
+      ensureCurrencyOption(e.target, code);
+      c = code;
+      e.target.value = code;
+    }
     let patch = { currency: c };
     if (c !== 'PLN') {
       const mid = await fetchNbpRate(c);
@@ -266,6 +288,7 @@ function bindUI() {
 
 function renderCurrency() {
   const c = cur();
+  ensureCurrencyOption($('currency'), c);
   if (document.activeElement !== $('currency')) $('currency').value = c;
   if (document.activeElement !== $('category')) $('category').value = session.category || 'inne';
   const foreign = c !== 'PLN';
