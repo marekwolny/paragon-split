@@ -161,8 +161,17 @@ async function toggleAssign(itemId, personId) {
   if (exists) {
     await db.from('assignments').delete().eq('item_id', itemId).eq('person_id', personId);
   } else {
-    await db.from('assignments').insert({ item_id: itemId, person_id: personId, session_id: sessionId });
+    await db.from('assignments').insert({ item_id: itemId, person_id: personId, session_id: sessionId, shares: 1 });
   }
+  loadAll();
+}
+
+// zwieksz udzial osoby w pozycji (np. para je za dwoje): 1 -> 2 -> 3 ... max 9
+async function bumpShares(itemId, personId) {
+  const a = assignments.find(x => x.item_id === itemId && x.person_id === personId);
+  if (!a) return;
+  const next = Math.min(9, (a.shares || 1) + 1);
+  await db.from('assignments').update({ shares: next }).eq('item_id', itemId).eq('person_id', personId);
   loadAll();
 }
 
@@ -175,7 +184,19 @@ async function onPhoto(e) {
   status.innerHTML = '<span class="spinner">🤖 Analizuję paragon…</span>';
 
   try {
-    const base64 = await downscale(file);
+    const { base64, blob } = await downscale(file);
+
+    // zapisz zdjecie paragonu do podgladu (nie blokuje analizy przy bledzie)
+    try {
+      const path = sessionId + '/' + Date.now() + '.jpg';
+      const up = await db.storage.from('receipts').upload(path, blob, { contentType: 'image/jpeg' });
+      if (!up.error) {
+        const url = SUPABASE_URL + '/storage/v1/object/public/receipts/' + path;
+        const urls = Array.isArray(session.receipt_urls) ? session.receipt_urls : [];
+        await db.from('sessions').update({ receipt_urls: [...urls, url] }).eq('id', sessionId);
+      }
+    } catch (e2) { console.warn('Nie udalo sie zapisac podgladu paragonu', e2); }
+
     const r = await fetch('/api/parse-receipt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -208,8 +229,11 @@ function downscale(file) {
       canvas.width = Math.round(img.width * scale);
       canvas.height = Math.round(img.height * scale);
       canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', 0.8).split(',')[1]);
-      URL.revokeObjectURL(img.src);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+      canvas.toBlob((blob) => {
+        resolve({ base64: dataUrl.split(',')[1], blob });
+        URL.revokeObjectURL(img.src);
+      }, 'image/jpeg', 0.8);
     };
     img.onerror = reject;
     img.src = URL.createObjectURL(file);
@@ -229,9 +253,29 @@ function render() {
   }
 
   renderPeople();
+  renderReceipts();
   renderItems();
   renderTip();
   renderSummary();
+}
+
+function renderReceipts() {
+  const box = $('receipt-thumbs');
+  if (!box) return;
+  box.innerHTML = '';
+  const urls = Array.isArray(session && session.receipt_urls) ? session.receipt_urls : [];
+  for (const url of urls) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = 'Paragon';
+    img.loading = 'lazy';
+    a.appendChild(img);
+    box.appendChild(a);
+  }
 }
 
 function renderPeople() {
@@ -287,11 +331,20 @@ function renderItems() {
     const actions = document.createElement('div');
     actions.className = 'item-actions chips';
     for (const p of people) {
+      const a = assignments.find(x => x.item_id === item.id && x.person_id === p.id);
       const chip = document.createElement('button');
-      chip.className = 'chip assignable' + (assigned.includes(p.id) ? ' on' : '');
-      chip.textContent = p.name;
+      chip.className = 'chip assignable' + (a ? ' on' : '');
+      chip.textContent = p.name + (a && (a.shares || 1) > 1 ? ' ×' + a.shares : '');
       chip.onclick = () => toggleAssign(item.id, p.id);
       actions.appendChild(chip);
+      if (a) {
+        const plus = document.createElement('button');
+        plus.className = 'chip-plus';
+        plus.textContent = '+';
+        plus.title = 'Zwiększ udział (np. je za dwoje)';
+        plus.onclick = (ev) => { ev.stopPropagation(); bumpShares(item.id, p.id); };
+        actions.appendChild(plus);
+      }
     }
     if (Math.round(item.qty) > 1) {
       const split = document.createElement('button');
@@ -332,8 +385,8 @@ function renderSummary() {
     const cost = item.qty * item.unit_price;
     const assigned = assignments.filter(a => a.item_id === item.id && shares[a.person_id] !== undefined);
     if (!assigned.length) { unassignedSum += cost; continue; }
-    const per = cost / assigned.length;
-    for (const a of assigned) shares[a.person_id] += per;
+    const totalSh = assigned.reduce((s, a) => s + (a.shares || 1), 0);
+    for (const a of assigned) shares[a.person_id] += cost * (a.shares || 1) / totalSh;
   }
 
   const itemsTotal = items.reduce((s, it) => s + it.qty * it.unit_price, 0);

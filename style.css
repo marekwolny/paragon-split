@@ -115,6 +115,26 @@ button {
 .chip.assignable { background: var(--bg); color: var(--muted); border-color: var(--border); }
 .chip.assignable.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 
+.chip-plus {
+  background: var(--accent-light);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  width: 30px;
+  height: 30px;
+  font-size: 16px;
+  font-weight: 700;
+  margin-left: -2px;
+}
+
+.thumbs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.thumbs img {
+  height: 72px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+}
+
 .item {
   border-bottom: 1px solid var(--border);
   padding: 10px 0;
