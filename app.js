@@ -492,9 +492,31 @@ function renderSummary() {
 
   for (const p of people) {
     const row = document.createElement('div');
-    row.className = 'summary-row';
-    row.innerHTML = `<span>${escapeHtml(p.name)}${t.tip > 0 ? `<span class="details">pozycje ${fmt(t.shares[p.id])} zł + napiwek ${fmt(t.tipShares[p.id])} zł</span>` : ''}</span><strong>${fmt(t.owed[p.id])} zł</strong>`;
+    row.className = 'summary-row clickable';
+    row.innerHTML = `<span><span class="chev">▸</span> ${escapeHtml(p.name)}${t.tip > 0 ? `<span class="details">pozycje ${fmt(t.shares[p.id])} zł + napiwek ${fmt(t.tipShares[p.id])} zł</span>` : ''}</span><strong>${fmt(t.owed[p.id])} zł</strong>`;
+
+    // szczegoly: dokladna lista pozycji tej osoby
+    const det = document.createElement('div');
+    det.className = 'person-details hidden';
+    const lines = [];
+    for (const item of items) {
+      const as = assignments.filter(a => a.item_id === item.id);
+      const mine = as.find(a => a.person_id === p.id);
+      if (!mine) continue;
+      const totalSh = as.reduce((s, a) => s + (a.shares || 1), 0);
+      const cost = item.qty * item.unit_price * (mine.shares || 1) / totalSh;
+      const shareTxt = totalSh > 1 ? ` <span class="muted">(${mine.shares || 1}/${totalSh} udz.)</span>` : '';
+      lines.push(`<div class="pd-row"><span>${escapeHtml(item.name)}${shareTxt}</span><span>${fmt(cost)} zł</span></div>`);
+    }
+    if (t.tipShares[p.id] > 0.005) lines.push(`<div class="pd-row"><span>Napiwek</span><span>${fmt(t.tipShares[p.id])} zł</span></div>`);
+    det.innerHTML = lines.join('') || '<div class="pd-row"><span class="muted">Brak przypisanych pozycji</span></div>';
+
+    row.onclick = () => {
+      det.classList.toggle('hidden');
+      row.classList.toggle('open');
+    };
     box.appendChild(row);
+    box.appendChild(det);
   }
 
   const totalRow = document.createElement('div');

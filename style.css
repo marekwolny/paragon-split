@@ -195,6 +195,23 @@ button {
 .summary-row:last-child { border-bottom: none; }
 .summary-row.total { font-weight: 700; }
 .summary-row .details { font-size: 0.78rem; color: var(--muted); display: block; margin-top: 2px; }
+.summary-row.clickable { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.summary-row .chev { display: inline-block; font-size: 0.75rem; color: var(--muted); transition: transform 0.2s; }
+.summary-row.open .chev { transform: rotate(90deg); }
+
+.person-details {
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin: 2px 0 8px;
+}
+.pd-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.85rem;
+  padding: 3px 0;
+}
 .warn { color: #b45309; font-size: 0.85rem; margin-top: 8px; }
 
 .payer-row { margin-top: 8px; }
