@@ -301,7 +301,7 @@ function renderItems() {
   for (const item of items) {
     const assigned = assignments.filter(a => a.item_id === item.id).map(a => a.person_id);
     const div = document.createElement('div');
-    div.className = 'item' + (assigned.length ? '' : ' unassigned');
+    div.className = 'item' + (assigned.length ? ' done' : ' unassigned');
 
     const top = document.createElement('div');
     top.className = 'item-top';

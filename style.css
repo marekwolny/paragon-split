@@ -137,9 +137,25 @@ button {
 
 .item {
   border-bottom: 1px solid var(--border);
-  padding: 10px 0;
+  padding: 10px 0 10px 10px;
+  border-left: 4px solid transparent;
+  border-radius: 4px 0 0 4px;
+  transition: background 0.25s, border-left-color 0.25s, opacity 0.25s;
 }
 .item:last-of-type { border-bottom: none; }
+
+/* pozycja w pelni przypisana: zielony pasek + wyszarzenie */
+.item.done {
+  border-left-color: #22c55e;
+  background: #f6fef8;
+  opacity: 0.72;
+}
+.item.done .item-total { color: #16a34a; }
+
+/* pozycja bez przypisania: bursztynowy pasek */
+.item.unassigned {
+  border-left-color: #f59e0b;
+}
 
 .item-top { display: flex; gap: 6px; align-items: center; }
 .item-top input.i-name { flex: 1; }
