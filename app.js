@@ -227,6 +227,14 @@ function bindUI() {
   $('btn-expand-all').onclick = toggleAllDetails;
   $('btn-copy-summary').onclick = copySummary;
 
+  // link do ustawienia wlasnego klucza AI
+  const aiBtn = document.createElement('button');
+  aiBtn.className = 'btn-split';
+  aiBtn.textContent = '🔑 Własny klucz AI';
+  aiBtn.title = 'Ustaw własny klucz Gemini do analizy paragonów';
+  aiBtn.onclick = setupAiKey;
+  $('receipt-thumbs').insertAdjacentElement('afterend', aiBtn);
+
   $('currency').addEventListener('change', async (e) => {
     const c = e.target.value;
     let patch = { currency: c };
@@ -432,6 +440,25 @@ const savePayment = debounce(async (personId, amount) => {
   loadAll();
 }, 600);
 
+// ---------- klucz AI (wlasny klucz Gemini per urzadzenie) ----------
+function setupAiKey() {
+  const cur = localStorage.getItem('geminiKey') || '';
+  const key = prompt(
+    'Analiza paragonów AI wymaga klucza Gemini.\n\n' +
+    'Jak zdobyć darmowy klucz (2 min):\n' +
+    '1. Wejdź na aistudio.google.com/apikey\n' +
+    '2. Zaloguj się kontem Google\n' +
+    '3. Kliknij "Create API key" i skopiuj klucz\n\n' +
+    'Wklej klucz poniżej — zapisze się tylko na tym urządzeniu.\n' +
+    '(pozostaw puste i OK, aby usunąć zapisany klucz)',
+    cur
+  );
+  if (key === null) return;
+  const k = key.trim();
+  if (k) { localStorage.setItem('geminiKey', k); toast('Klucz zapisany na tym urządzeniu 🔑'); }
+  else { localStorage.removeItem('geminiKey'); toast('Klucz usunięty'); }
+}
+
 // ---------- zdjęcie -> Gemini ----------
 async function onPhoto(e) {
   const file = e.target.files[0];
@@ -454,12 +481,25 @@ async function onPhoto(e) {
       }
     } catch (e2) { console.warn('Nie udalo sie zapisac podgladu paragonu', e2); }
 
+    // autoryzacja AI: zalogowany user (whitelist) albo wlasny klucz z tego urzadzenia
+    const headers = { 'Content-Type': 'application/json' };
+    try {
+      const { data: sess } = await db.auth.getSession();
+      if (sess && sess.session) headers.Authorization = 'Bearer ' + sess.session.access_token;
+    } catch { /* niezalogowany */ }
+    const userKey = localStorage.getItem('geminiKey') || undefined;
+
     const r = await fetch('/api/parse-receipt', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: base64, mimeType: 'image/jpeg' }),
+      headers,
+      body: JSON.stringify({ image: base64, mimeType: 'image/jpeg', userKey }),
     });
     const data = await r.json();
+    if (r.status === 403 && data.needKey) {
+      status.innerHTML = '🔑 Analiza AI wymaga własnego (darmowego) klucza Gemini. Pozycje możesz też dodać ręcznie.';
+      setupAiKey();
+      return;
+    }
     if (!r.ok) throw new Error(data.error || 'Błąd API');
     if (!data.items.length) { status.textContent = 'Nie rozpoznano pozycji — spróbuj wyraźniejszego zdjęcia.'; return; }
 

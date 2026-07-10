@@ -213,10 +213,82 @@ function groupTotals() {
   return { owedPln, paidPln, unassignedPln, missingRate };
 }
 
+// ---------- "kim jestes" (onboarding po wejsciu z linku) ----------
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function renderMe() {
+  const box = $('me-box');
+  if (!box) return;
+  box.innerHTML = '';
+  const meId = localStorage.getItem('me-' + groupId);
+  const me = people.find(p => p.id === meId);
+
+  if (me) {
+    box.innerHTML = `<div class="me-row">Ty w tej grupie: <strong>${esc(me.name)}</strong> <button class="btn-split" id="me-rename">✏️ zmień imię</button> <button class="btn-split" id="me-clear">to nie ja</button></div>`;
+    $('me-rename').onclick = async () => {
+      const n = prompt('Twoje imię widoczne w grupie:', me.name);
+      if (!n || !n.trim()) return;
+      await db.from('people').update({ name: n.trim() }).eq('id', me.id);
+      loadAll();
+    };
+    $('me-clear').onclick = () => { localStorage.removeItem('me-' + groupId); render(); };
+    return;
+  }
+
+  // nowa osoba z linku: wybierz siebie albo dopisz sie
+  const wrap = document.createElement('div');
+  wrap.className = 'me-join';
+  wrap.innerHTML = '<p class="me-hello">👋 Kim jesteś w tej grupie?</p>';
+  if (people.length) {
+    const hint = document.createElement('p');
+    hint.className = 'muted small';
+    hint.textContent = 'Jesteś już na liście? Dotknij swojego imienia:';
+    wrap.appendChild(hint);
+    const chips = document.createElement('div');
+    chips.className = 'chips';
+    for (const p of people) {
+      const c = document.createElement('button');
+      c.className = 'chip assignable';
+      c.textContent = p.name;
+      c.onclick = () => { localStorage.setItem('me-' + groupId, p.id); toast('Cześć, ' + p.name + '! 👋'); render(); };
+      chips.appendChild(c);
+    }
+    wrap.appendChild(chips);
+  }
+  const row = document.createElement('div');
+  row.className = 'row';
+  const inp = document.createElement('input');
+  inp.type = 'text';
+  inp.placeholder = people.length ? 'Albo dopisz nowe imię' : 'Twoje imię';
+  inp.maxLength = 30;
+  const btn = document.createElement('button');
+  btn.className = 'btn-small';
+  btn.textContent = 'Dołącz';
+  const join = async () => {
+    const name = inp.value.trim();
+    if (!name) return;
+    if (people.some(p => p.name.toLowerCase() === name.toLowerCase())) return toast('To imię już jest — dotknij go na liście');
+    const { data, error } = await db.from('people').insert({ group_id: groupId, name }).select().single();
+    if (error) return toast('Błąd: ' + error.message);
+    localStorage.setItem('me-' + groupId, data.id);
+    toast('Witaj w grupie, ' + name + '! 🎉');
+    loadAll();
+  };
+  btn.onclick = join;
+  inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });
+  row.append(inp, btn);
+  wrap.appendChild(row);
+  box.appendChild(wrap);
+}
+
 function render() {
   if (document.activeElement !== $('group-name-input')) $('group-name-input').value = group.name;
   $('group-title').textContent = '🏕️ ' + group.name;
   document.title = group.name + ' — ParagonSplit';
+
+  renderMe();
 
   // uczestnicy
   const pl = $('people-list');

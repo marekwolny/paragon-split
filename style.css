@@ -280,6 +280,21 @@ strong.pos { color: #16a34a; }
 
 #group-name-input { font-weight: 600; }
 
+#me-box .me-join {
+  background: var(--accent-light);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.me-hello { font-weight: 600; margin-bottom: 6px; }
+.me-row {
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+
 #toast {
   position: fixed;
   bottom: 20px;
