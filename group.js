@@ -347,8 +347,8 @@ function renderMe() {
   const me = people.find(p => p.id === meId);
 
   if (me) {
-    const phoneTxt = me.phone ? '📱 ' + esc(me.phone) : '📱 nr do przelewów';
-    box.innerHTML = `<div class="me-row">Ty w tej grupie: <strong>${esc(me.name)}</strong> <button class="btn-split" id="me-rename">✏️ zmień imię</button> <button class="btn-split" id="me-phone">${phoneTxt}</button> <button class="btn-split" id="me-clear">to nie ja</button></div>`;
+    const phoneTxt = me.phone ? '📱 ' + esc(me.phone) : t('📱 nr do przelewów');
+    box.innerHTML = `<div class="me-row">${t('Ty w tej grupie:')} <strong>${esc(me.name)}</strong> <button class="btn-split" id="me-rename">${t('✏️ zmień imię')}</button> <button class="btn-split" id="me-phone">${phoneTxt}</button> <button class="btn-split" id="me-clear">${t('to nie ja')}</button></div>`;
     $('me-rename').onclick = async () => {
       const n = prompt('Twoje imię widoczne w grupie:', me.name);
       if (!n || !n.trim()) return;
@@ -368,11 +368,11 @@ function renderMe() {
   // nowa osoba z linku: wybierz siebie albo dopisz sie
   const wrap = document.createElement('div');
   wrap.className = 'me-join';
-  wrap.innerHTML = '<p class="me-hello">👋 Kim jesteś w tej grupie?</p>';
+  wrap.innerHTML = '<p class="me-hello">' + t('👋 Kim jesteś w tej grupie?') + '</p>';
   if (people.length) {
     const hint = document.createElement('p');
     hint.className = 'muted small';
-    hint.textContent = 'Jesteś już na liście? Dotknij swojego imienia:';
+    hint.textContent = t('Jesteś już na liście? Dotknij swojego imienia:');
     wrap.appendChild(hint);
     const chips = document.createElement('div');
     chips.className = 'chips';
@@ -389,11 +389,11 @@ function renderMe() {
   row.className = 'row';
   const inp = document.createElement('input');
   inp.type = 'text';
-  inp.placeholder = people.length ? 'Albo dopisz nowe imię' : 'Twoje imię';
+  inp.placeholder = people.length ? t('Albo dopisz nowe imię') : t('Twoje imię');
   inp.maxLength = 30;
   const btn = document.createElement('button');
   btn.className = 'btn-small';
-  btn.textContent = 'Dołącz';
+  btn.textContent = t('Dołącz');
   const join = async () => {
     const name = inp.value.trim();
     if (!name) return;
@@ -422,7 +422,7 @@ function render() {
   // uczestnicy
   const pl = $('people-list');
   pl.innerHTML = '';
-  if (!people.length) pl.innerHTML = '<span class="muted small">Dodaj uczestników wyjazdu — będą widoczni we wszystkich paragonach</span>';
+  if (!people.length) pl.innerHTML = '<span class="muted small">' + t('Dodaj uczestników wyjazdu — będą widoczni we wszystkich paragonach') + '</span>';
   for (const p of people) {
     const chip = document.createElement('button');
     chip.className = 'chip';
@@ -434,7 +434,7 @@ function render() {
   // paragony
   const rl = $('receipts-list');
   rl.innerHTML = '';
-  if (!sessions.length) rl.innerHTML = '<p class="muted small">Brak paragonów — dodaj pierwszy.</p>';
+  if (!sessions.length) rl.innerHTML = '<p class="muted small">' + t('Brak paragonów — dodaj pierwszy.') + '</p>';
   for (const s of sessions) {
     const t = sessionTotals(s);
     const row = document.createElement('div');
@@ -483,12 +483,12 @@ function renderCatChart() {
   box.innerHTML = '';
   const totals = categoryTotals();
   const entries = Object.entries(totals).filter(([, v]) => v > 0.005).sort((a, b) => b[1] - a[1]);
-  if (!entries.length) { box.innerHTML = '<p class="muted small">Brak wydatków.</p>'; return; }
+  if (!entries.length) { box.innerHTML = '<p class="muted small">' + t('Brak wydatków.') + '</p>'; return; }
   const max = entries[0][1];
   for (const [cat, val] of entries) {
     const row = document.createElement('div');
     row.className = 'cat-row';
-    row.innerHTML = `<span class="cat-label">${CATS[cat] || '📦'} ${esc(cat)}</span><div class="cat-track"><div class="cat-bar" style="width:${Math.max(4, Math.round(val / max * 100))}%"></div></div><span class="cat-val">${fmt(val)} zł</span>`;
+    row.innerHTML = `<span class="cat-label">${CATS[cat] || '📦'} ${esc(t(cat))}</span><div class="cat-track"><div class="cat-bar" style="width:${Math.max(4, Math.round(val / max * 100))}%"></div></div><span class="cat-val">${fmt(val)} zł</span>`;
     box.appendChild(row);
   }
 }
@@ -497,7 +497,7 @@ function renderActivity() {
   const box = $('activity-list');
   if (!box) return;
   box.innerHTML = '';
-  if (!activity.length) { box.innerHTML = '<p class="muted small">Brak aktywności.</p>'; return; }
+  if (!activity.length) { box.innerHTML = '<p class="muted small">' + t('Brak aktywności.') + '</p>'; return; }
   for (const a of activity) {
     const d = new Date(a.created_at);
     const row = document.createElement('div');
@@ -514,33 +514,33 @@ function renderGroupSummary() {
   setBox.innerHTML = '';
 
   if (!people.length || !sessions.length) {
-    box.innerHTML = '<p class="muted small">Dodaj uczestników i paragony, aby zobaczyć rozliczenie.</p>';
+    box.innerHTML = '<p class="muted small">' + t('Dodaj uczestników i paragony, aby zobaczyć rozliczenie.') + '</p>';
     return;
   }
 
-  const t = groupTotals();
+  const g = groupTotals();
   let grandOwed = 0, grandPaid = 0;
   for (const p of people) {
-    grandOwed += t.owedPln[p.id];
-    grandPaid += t.paidPln[p.id];
-    const net = t.paidPln[p.id] - t.owedPln[p.id];
+    grandOwed += g.owedPln[p.id];
+    grandPaid += g.paidPln[p.id];
+    const net = g.paidPln[p.id] - g.owedPln[p.id];
     const row = document.createElement('div');
     row.className = 'summary-row';
-    row.innerHTML = `<span>${p.name}<span class="details">wydał ${fmt(t.owedPln[p.id])} zł · zapłacił ${fmt(t.paidPln[p.id])} zł</span></span><strong class="${net < -0.005 ? 'neg' : net > 0.005 ? 'pos' : ''}">${net > 0.005 ? '+' : ''}${fmt(net)} zł</strong>`;
+    row.innerHTML = `<span>${esc(p.name)}<span class="details">${t('wydał')} ${fmt(g.owedPln[p.id])} zł · ${t('zapłacił')} ${fmt(g.paidPln[p.id])} zł</span></span><strong class="${net < -0.005 ? 'neg' : net > 0.005 ? 'pos' : ''}">${net > 0.005 ? '+' : ''}${fmt(net)} zł</strong>`;
     box.appendChild(row);
   }
   const totalRow = document.createElement('div');
   totalRow.className = 'summary-row total';
-  totalRow.innerHTML = `<span>Razem wydatki</span><span>${fmt(grandOwed)} zł</span>`;
+  totalRow.innerHTML = `<span>${t('Razem wydatki')}</span><span>${fmt(grandOwed)} zł</span>`;
   box.appendChild(totalRow);
 
-  if (t.unassignedPln > 0.005) {
+  if (g.unassignedPln > 0.005) {
     const w = document.createElement('p');
     w.className = 'warn';
-    w.textContent = `⚠️ Nieprzypisane pozycje: ${fmt(t.unassignedPln)} zł`;
+    w.textContent = `⚠️ ${t('Nieprzypisane pozycje')}: ${fmt(g.unassignedPln)} zł`;
     box.appendChild(w);
   }
-  for (const s of t.missingRate) {
+  for (const s of g.missingRate) {
     const w = document.createElement('p');
     w.className = 'warn';
     w.textContent = `⚠️ „${s.name || 'Rachunek'}" (${s.currency}) pominięty — brak kursu. Otwórz go i podaj kurs lub kwotę w PLN.`;
@@ -553,18 +553,18 @@ function renderGroupSummary() {
     box.appendChild(w);
   }
 
-  const transfers = computeTransfers(t);
+  const transfers = computeTransfers(g);
   if (transfers.length) {
     const h = document.createElement('h3');
     h.className = 'settle-title';
-    h.textContent = 'Kto komu oddaje';
+    h.textContent = t('Kto komu oddaje');
     setBox.appendChild(h);
     for (const tr of transfers) {
       const toPerson = people.find(p => p.name === tr.to);
       const phone = toPerson && toPerson.phone ? ` <span class="muted small">📱 ${esc(toPerson.phone)}</span>` : '';
       const row = document.createElement('div');
       row.className = 'settle-row';
-      row.innerHTML = `<span>${esc(tr.from)} → ${esc(tr.to)}${phone}</span><span class="settle-actions"><strong>${fmt(tr.amount)} zł</strong> <button class="btn-small settle-done">✓ oddane</button></span>`;
+      row.innerHTML = `<span>${esc(tr.from)} → ${esc(tr.to)}${phone}</span><span class="settle-actions"><strong>${fmt(tr.amount)} zł</strong> <button class="btn-small settle-done">${t('✓ oddane')}</button></span>`;
       row.querySelector('.settle-done').onclick = () => {
         const fromP = people.find(p => p.name === tr.from);
         if (fromP && toPerson) markSettled(fromP.id, toPerson.id, tr.amount);
@@ -580,7 +580,7 @@ function renderGroupSummary() {
     if (settlements.length) {
       const h2 = document.createElement('h3');
       h2.className = 'settle-title';
-      h2.textContent = 'Spłacone ✓';
+      h2.textContent = t('Spłacone ✓');
       sBox.appendChild(h2);
       for (const st of settlements) {
         const f = people.find(p => p.id === st.from_person);

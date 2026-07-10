@@ -314,12 +314,12 @@ function toggleAllDetails() {
 
 // pelny tekst rozliczenia do wklejenia na czacie
 function buildSummaryText() {
-  const t = computeTotals();
-  const lines = ['🧾 Rozliczenie rachunku', ''];
+  const tot = computeTotals();
+  const lines = [t('🧾 Rozliczenie rachunku'), ''];
   const rate = effectiveRate();
   for (const p of people) {
-    const plnTxt = cur() !== 'PLN' && rate ? ` (≈ ${fmt(t.owed[p.id] * rate)} zł)` : '';
-    lines.push(`${p.name} — do zapłaty ${fmtC(t.owed[p.id])}${plnTxt}`);
+    const plnTxt = cur() !== 'PLN' && rate ? ` (≈ ${fmt(tot.owed[p.id] * rate)} zł)` : '';
+    lines.push(`${p.name} ${t('— do zapłaty')} ${fmtC(tot.owed[p.id])}${plnTxt}`);
     for (const item of items) {
       const as = assignments.filter(a => a.item_id === item.id);
       const mine = as.find(a => a.person_id === p.id);
@@ -329,21 +329,21 @@ function buildSummaryText() {
       const shareTxt = totalSh > 1 ? ` (${mine.shares || 1}/${totalSh})` : '';
       lines.push(`  • ${item.name}${shareTxt}: ${fmtC(cost)}`);
     }
-    if (t.tipShares[p.id] > 0.005) lines.push(`  • napiwek: ${fmtC(t.tipShares[p.id])}`);
+    if (tot.tipShares[p.id] > 0.005) lines.push(`  • ${t('napiwek')}: ${fmtC(tot.tipShares[p.id])}`);
     lines.push('');
   }
-  lines.push(`Razem: ${fmtC(t.grand)}${cur() !== 'PLN' && rate ? ` ≈ ${fmt(t.grand * rate)} zł (kurs ${rate.toFixed(4)})` : ''}`);
-  if (t.unassignedSum > 0.005) lines.push(`⚠️ Nieprzypisane: ${fmt(t.unassignedSum)} zł`);
+  lines.push(`${t('Razem')}: ${fmtC(tot.grand)}${cur() !== 'PLN' && rate ? ` ≈ ${fmt(tot.grand * rate)} zł (${rate.toFixed(4)})` : ''}`);
+  if (tot.unassignedSum > 0.005) lines.push(`⚠️ ${t('Nieprzypisane pozycje')}: ${fmt(tot.unassignedSum)} zł`);
 
   if (payments.length) {
     const paid = {};
     for (const p of people) paid[p.id] = 0;
     for (const pay of payments) if (paid[pay.person_id] !== undefined) paid[pay.person_id] += Number(pay.amount) || 0;
-    const nets = people.map(p => ({ name: p.name, net: Math.round((paid[p.id] - t.owed[p.id]) * 100) / 100 }));
+    const nets = people.map(p => ({ name: p.name, net: Math.round((paid[p.id] - tot.owed[p.id]) * 100) / 100 }));
     const debtors = nets.filter(x => x.net < -0.005).map(x => ({ ...x, net: -x.net })).sort((a, b) => b.net - a.net);
     const creditors = nets.filter(x => x.net > 0.005).sort((a, b) => b.net - a.net);
     if (debtors.length && creditors.length) {
-      lines.push('', 'Kto komu oddaje:');
+      lines.push('', t('Kto komu oddaje:'));
       let di = 0, ci = 0;
       while (di < debtors.length && ci < creditors.length) {
         const amount = Math.min(debtors[di].net, creditors[ci].net);
@@ -627,7 +627,7 @@ function renderReceipts() {
 function renderPeople() {
   const box = $('people-list');
   box.innerHTML = '';
-  if (!people.length) box.innerHTML = '<span class="muted small">Dodaj osoby, które się składają</span>';
+  if (!people.length) box.innerHTML = '<span class="muted small">' + t('Dodaj osoby, które się składają') + '</span>';
   for (const p of people) {
     const chip = document.createElement('button');
     chip.className = 'chip';
@@ -641,7 +641,7 @@ function renderItems() {
   const box = $('items-list');
   box.innerHTML = '';
   if (!items.length) {
-    box.innerHTML = '<p class="muted small">Brak pozycji — wgraj zdjęcie paragonu lub dodaj ręcznie.</p>';
+    box.innerHTML = '<p class="muted small">' + t('Brak pozycji — wgraj zdjęcie paragonu lub dodaj ręcznie.') + '</p>';
     return;
   }
   for (const item of items) {
@@ -716,7 +716,7 @@ function renderItems() {
     if (Math.round(item.qty) > 1) {
       const split = document.createElement('button');
       split.className = 'btn-split';
-      split.textContent = `Rozdziel na ${Math.round(item.qty)} × 1 szt.`;
+      split.textContent = `${t('Rozdziel na')} ${Math.round(item.qty)} × 1 ${t('szt.')}`;
       split.onclick = () => splitItem(item);
       actions.appendChild(split);
     }
@@ -821,18 +821,19 @@ function renderSummary() {
   if (setBox) setBox.innerHTML = '';
 
   if (!people.length || !items.length) {
-    box.innerHTML = '<p class="muted small">Dodaj osoby i pozycje, aby zobaczyć podział.</p>';
+    box.innerHTML = '<p class="muted small">' + t('Dodaj osoby i pozycje, aby zobaczyć podział.') + '</p>';
     return;
   }
 
-  const t = computeTotals();
+  const tt = computeTotals();
+  const t2 = tt;
 
   for (const p of people) {
     const rate = effectiveRate();
-    const plnTxt = cur() !== 'PLN' && rate ? `<span class="details">≈ ${fmt(t.owed[p.id] * rate)} zł</span>` : '';
+    const plnTxt = cur() !== 'PLN' && rate ? `<span class="details">≈ ${fmt(t2.owed[p.id] * rate)} zł</span>` : '';
     const row = document.createElement('div');
     row.className = 'summary-row clickable';
-    row.innerHTML = `<span><span class="chev">▸</span> ${escapeHtml(p.name)}${t.tip > 0 ? `<span class="details">pozycje ${fmtC(t.shares[p.id])} + napiwek ${fmtC(t.tipShares[p.id])}</span>` : ''}</span><span class="amount-col"><strong>${fmtC(t.owed[p.id])}</strong>${plnTxt}</span>`;
+    row.innerHTML = `<span><span class="chev">▸</span> ${escapeHtml(p.name)}${t2.tip > 0 ? `<span class="details">${t('pozycje')} ${fmtC(t2.shares[p.id])} + ${t('napiwek')} ${fmtC(t2.tipShares[p.id])}</span>` : ''}</span><span class="amount-col"><strong>${fmtC(t2.owed[p.id])}</strong>${plnTxt}</span>`;
 
     // szczegoly: dokladna lista pozycji tej osoby
     const det = document.createElement('div');
@@ -844,11 +845,11 @@ function renderSummary() {
       if (!mine) continue;
       const totalSh = as.reduce((s, a) => s + (a.shares || 1), 0);
       const cost = item.qty * item.unit_price * (mine.shares || 1) / totalSh;
-      const shareTxt = totalSh > 1 ? ` <span class="muted">(${mine.shares || 1}/${totalSh} udz.)</span>` : '';
+      const shareTxt = totalSh > 1 ? ` <span class="muted">(${mine.shares || 1}/${totalSh} ${t('udz.')})</span>` : '';
       lines.push(`<div class="pd-row"><span>${escapeHtml(item.name)}${shareTxt}</span><span>${fmtC(cost)}</span></div>`);
     }
-    if (t.tipShares[p.id] > 0.005) lines.push(`<div class="pd-row"><span>Napiwek</span><span>${fmtC(t.tipShares[p.id])}</span></div>`);
-    det.innerHTML = lines.join('') || '<div class="pd-row"><span class="muted">Brak przypisanych pozycji</span></div>';
+    if (t2.tipShares[p.id] > 0.005) lines.push(`<div class="pd-row"><span>${t('Napiwek')}</span><span>${fmtC(t2.tipShares[p.id])}</span></div>`);
+    det.innerHTML = lines.join('') || '<div class="pd-row"><span class="muted">' + t('Brak przypisanych pozycji') + '</span></div>';
 
     row.onclick = () => {
       det.classList.toggle('hidden');
@@ -861,7 +862,7 @@ function renderSummary() {
   const rateT = effectiveRate();
   const totalRow = document.createElement('div');
   totalRow.className = 'summary-row total';
-  totalRow.innerHTML = `<span>Razem</span><span class="amount-col"><span>${fmtC(t.grand)}</span>${cur() !== 'PLN' && rateT ? `<span class="details">≈ ${fmt(t.grand * rateT)} zł (kurs ${rateT.toFixed(4)})</span>` : ''}</span>`;
+  totalRow.innerHTML = `<span>${t('Razem')}</span><span class="amount-col"><span>${fmtC(t2.grand)}</span>${cur() !== 'PLN' && rateT ? `<span class="details">≈ ${fmt(t2.grand * rateT)} zł (${rateT.toFixed(4)})</span>` : ''}</span>`;
   box.appendChild(totalRow);
   if (cur() !== 'PLN' && !rateT) {
     const w = document.createElement('p');
@@ -870,18 +871,18 @@ function renderSummary() {
     box.appendChild(w);
   }
 
-  if (t.unassignedSum > 0.005) {
+  if (t2.unassignedSum > 0.005) {
     const w = document.createElement('p');
     w.className = 'warn';
-    w.textContent = `⚠️ Nieprzypisane pozycje: ${fmt(t.unassignedSum)} zł (nie wliczone do podziału)`;
+    w.textContent = `⚠️ ${t('Nieprzypisane pozycje')}: ${fmt(t2.unassignedSum)} zł ${t('(nie wliczone do podziału)')}`;
     box.appendChild(w);
   }
 
-  renderSettlement(t);
+  renderSettlement(t2);
 }
 
 // kto komu ile oddaje (na podstawie wplat)
-function renderSettlement(t) {
+function renderSettlement(tot) {
   const box = $('settlement');
   if (!box || !payments.length) return;
 
@@ -892,25 +893,25 @@ function renderSettlement(t) {
 
   const h = document.createElement('h3');
   h.className = 'settle-title';
-  h.textContent = 'Rozliczenie';
+  h.textContent = t('Rozliczenie');
   box.appendChild(h);
 
-  if (Math.abs(paidTotal - t.grand) > 0.01) {
+  if (Math.abs(paidTotal - tot.grand) > 0.01) {
     const info = document.createElement('p');
     info.className = 'warn';
-    info.textContent = `⚠️ Wpłaty (${fmtC(paidTotal)}) różnią się od rachunku (${fmtC(t.grand)}) — popraw kwoty.`;
+    info.textContent = `⚠️ Wpłaty (${fmtC(paidTotal)}) różnią się od rachunku (${fmtC(tot.grand)}) — popraw kwoty.`;
     box.appendChild(info);
   }
 
   // net > 0: nadplacil (dostaje zwrot), net < 0: oddaje
-  const nets = people.map(p => ({ name: p.name, net: Math.round((paid[p.id] - t.owed[p.id]) * 100) / 100 }));
+  const nets = people.map(p => ({ name: p.name, net: Math.round((paid[p.id] - tot.owed[p.id]) * 100) / 100 }));
   const debtors = nets.filter(x => x.net < -0.005).map(x => ({ ...x, net: -x.net })).sort((a, b) => b.net - a.net);
   const creditors = nets.filter(x => x.net > 0.005).sort((a, b) => b.net - a.net);
 
   if (!debtors.length) {
     const ok = document.createElement('p');
     ok.className = 'muted small';
-    ok.textContent = 'Wszystko rozliczone ✅';
+    ok.textContent = t('Wszystko rozliczone ✅');
     box.appendChild(ok);
     return;
   }
