@@ -217,7 +217,11 @@ function bindUI() {
   $('btn-add-person').onclick = addPerson;
   $('person-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') addPerson(); });
   $('btn-add-item').onclick = addItemManual;
+  $('btn-all-assign').onclick = assignEveryoneToEverything;
   $('file-input').addEventListener('change', onPhoto);
+  $('category').addEventListener('change', async (e) => {
+    await db.from('sessions').update({ category: e.target.value }).eq('id', sessionId);
+  });
   $('tip-input').addEventListener('change', async (e) => {
     const tip = Math.max(0, parseFloat(String(e.target.value).replace(',', '.')) || 0);
     await db.from('sessions').update({ tip }).eq('id', sessionId);
@@ -263,6 +267,7 @@ function bindUI() {
 function renderCurrency() {
   const c = cur();
   if (document.activeElement !== $('currency')) $('currency').value = c;
+  if (document.activeElement !== $('category')) $('category').value = session.category || 'inne';
   const foreign = c !== 'PLN';
   $('fx-rate').classList.toggle('hidden', !foreign);
   $('fx-label').classList.toggle('hidden', !foreign);
@@ -409,6 +414,25 @@ async function toggleAssign(itemId, personId) {
   } else {
     await db.from('assignments').insert({ item_id: itemId, person_id: personId, session_id: sessionId, shares: 1 });
   }
+  loadAll();
+}
+
+// jednym tapnieciem: kazda pozycja podzielona rowno na wszystkich
+async function assignEveryoneToEverything() {
+  if (!people.length || !items.length) return toast('Brak osób lub pozycji');
+  if (!confirm('Przypisać WSZYSTKIE osoby do WSZYSTKICH pozycji (po równo)? Istniejące przypisania zostaną zachowane.')) return;
+  const rows = [];
+  for (const item of items) {
+    for (const p of people) {
+      if (!assignments.some(a => a.item_id === item.id && a.person_id === p.id)) {
+        rows.push({ item_id: item.id, person_id: p.id, session_id: sessionId, shares: 1 });
+      }
+    }
+  }
+  if (!rows.length) return toast('Wszystko już przypisane');
+  const { error } = await db.from('assignments').insert(rows);
+  if (error) return toast('Błąd: ' + error.message);
+  toast(`Przypisano ${rows.length} pozycji 👥`);
   loadAll();
 }
 

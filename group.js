@@ -10,6 +10,11 @@ let sessions = [];
 let items = [];
 let assignments = [];
 let payments = [];
+let settlements = [];
+let activity = [];
+let qePayerId = null;
+
+const CATS = { jedzenie: '🍕', transport: '🚗', nocleg: '🏨', rozrywka: '🎉', zakupy: '🛒', inne: '📦' };
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => (Math.round(n * 100) / 100).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -60,6 +65,9 @@ async function init() {
   $('person-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') addPerson(); });
   $('btn-add-receipt').onclick = addReceipt;
   $('btn-copy-group').onclick = copyGroupSummary;
+  $('btn-csv').onclick = exportCsv;
+  $('btn-print').onclick = () => window.print();
+  $('qe-add').onclick = addQuickExpense;
   $('group-name-input').addEventListener('input', debounce(async () => {
     await db.from('groups').update({ name: $('group-name-input').value.trim() || 'Wyjazd' }).eq('id', groupId);
   }, 600));
@@ -74,12 +82,16 @@ async function loadAll() {
   if (g.error || !g.data || !g.data.length) { toast('Nie znaleziono grupy'); return; }
   group = g.data[0];
 
-  const [p, s] = await Promise.all([
+  const [p, s, st, act] = await Promise.all([
     db.from('people').select('*').eq('group_id', groupId).order('created_at'),
     db.from('sessions').select('*').eq('group_id', groupId).order('created_at'),
+    db.from('settlements').select('*').eq('group_id', groupId).order('created_at'),
+    db.from('activity').select('*').eq('group_id', groupId).order('created_at', { ascending: false }).limit(30),
   ]);
   people = p.data || [];
   sessions = s.data || [];
+  settlements = st.data || [];
+  activity = act.data || [];
 
   const ids = sessions.map(x => x.id);
   if (ids.length) {
@@ -114,7 +126,59 @@ function subscribeRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, reload)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'assignments' }, reload)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, reload)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'settlements', filter: `group_id=eq.${groupId}` }, reload)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'activity', filter: `group_id=eq.${groupId}` }, reload)
     .subscribe();
+}
+
+// imie "mnie" do logu aktywnosci
+function meName() {
+  const meId = localStorage.getItem('me-' + groupId);
+  const me = people.find(p => p.id === meId);
+  return me ? me.name : null;
+}
+
+// log aktywnosci (fire & forget)
+function logActivity(text) {
+  const who = meName();
+  db.from('activity').insert({ group_id: groupId, text: (who ? who + ': ' : '') + text }).then(() => {});
+}
+
+// ---------- szybki wydatek bez paragonu ----------
+async function addQuickExpense() {
+  const name = $('qe-name').value.trim();
+  const amount = Number($('qe-amount').value) || 0;
+  const currency = $('qe-currency').value;
+  const category = $('qe-category').value;
+  if (!name) return toast('Wpisz, czego dotyczy wydatek');
+  if (amount <= 0) return toast('Wpisz kwotę');
+  if (!people.length) return toast('Najpierw dodaj uczestników');
+  if (!qePayerId) return toast('Zaznacz, kto zapłacił');
+
+  let fx_rate = null;
+  if (currency !== 'PLN') {
+    try {
+      const r = await fetch('https://api.nbp.pl/api/exchangerates/rates/a/' + currency.toLowerCase() + '/?format=json');
+      if (r.ok) { const d = await r.json(); fx_rate = d.rates && d.rates[0] ? d.rates[0].mid : null; }
+    } catch { /* brak kursu - uzupelnia sie w paragonie */ }
+  }
+
+  const { data: ses, error } = await db.from('sessions')
+    .insert({ group_id: groupId, name, currency, fx_rate, category }).select().single();
+  if (error) return toast('Błąd: ' + error.message);
+
+  const { data: item, error: e2 } = await db.from('items')
+    .insert({ session_id: ses.id, name, qty: 1, unit_price: amount }).select().single();
+  if (e2) return toast('Błąd: ' + e2.message);
+
+  await db.from('assignments').insert(people.map(p => ({ item_id: item.id, person_id: p.id, session_id: ses.id, shares: 1 })));
+  await db.from('payments').insert({ session_id: ses.id, person_id: qePayerId, amount });
+
+  logActivity(`dodał(a) wydatek "${name}" ${amount} ${currency}`);
+  $('qe-name').value = ''; $('qe-amount').value = '';
+  qePayerId = null;
+  toast('Wydatek dodany ⚡');
+  loadAll();
 }
 
 async function share() {
@@ -137,19 +201,40 @@ async function addPerson() {
 
 async function removePerson(id) {
   if (!confirm('Usunąć osobę? Zniknie ze WSZYSTKICH paragonów tej grupy razem z przypisaniami.')) return;
+  const p = people.find(x => x.id === id);
   await db.from('people').delete().eq('id', id);
+  logActivity('usunął(ęła) osobę ' + (p ? p.name : ''));
   loadAll();
 }
 
 async function addReceipt() {
   const { data, error } = await db.from('sessions').insert({ group_id: groupId, name: 'Rachunek ' + (sessions.length + 1) }).select().single();
   if (error) return toast('Błąd: ' + error.message);
+  logActivity('dodał(a) paragon "' + data.name + '"');
   location.href = 'index.html?s=' + data.id;
 }
 
 async function removeReceipt(id) {
   if (!confirm('Usunąć ten paragon z całą zawartością?')) return;
+  const s = sessions.find(x => x.id === id);
   await db.from('sessions').delete().eq('id', id);
+  logActivity('usunął(ęła) paragon "' + (s ? s.name : '') + '"');
+  loadAll();
+}
+
+// ---------- splaty ----------
+async function markSettled(fromId, toId, amount) {
+  const from = people.find(p => p.id === fromId), to = people.find(p => p.id === toId);
+  if (!confirm(`Potwierdzić: ${from.name} oddał(a) ${to.name} ${fmt(amount)} zł?`)) return;
+  const { error } = await db.from('settlements').insert({ group_id: groupId, from_person: fromId, to_person: toId, amount: Math.round(amount * 100) / 100 });
+  if (error) return toast('Błąd: ' + error.message);
+  logActivity(`oznaczył(a) spłatę: ${from.name} → ${to.name} ${fmt(amount)} zł ✓`);
+  loadAll();
+}
+
+async function undoSettlement(id) {
+  if (!confirm('Cofnąć tę spłatę?')) return;
+  await db.from('settlements').delete().eq('id', id);
   loadAll();
 }
 
@@ -210,7 +295,25 @@ function groupTotals() {
     for (const pid in t.paid) if (paidPln[pid] !== undefined) paidPln[pid] += t.paid[pid] * t.rate;
     unassignedPln += t.unassigned * t.rate;
   }
+  // splaty: kto oddal, temu rosnie "zaplacone"; kto dostal, temu maleje
+  for (const st of settlements) {
+    const amt = Number(st.amount) || 0;
+    if (paidPln[st.from_person] !== undefined) paidPln[st.from_person] += amt;
+    if (paidPln[st.to_person] !== undefined) paidPln[st.to_person] -= amt;
+  }
   return { owedPln, paidPln, unassignedPln, missingRate };
+}
+
+// wydatki wg kategorii (PLN)
+function categoryTotals() {
+  const out = {};
+  for (const s of sessions) {
+    const t = sessionTotals(s);
+    if (!t.rate) continue;
+    const cat = s.category || 'inne';
+    out[cat] = (out[cat] || 0) + (t.itemsTotal + t.tip) * t.rate;
+  }
+  return out;
 }
 
 // ---------- "kim jestes" (onboarding po wejsciu z linku) ----------
@@ -226,11 +329,18 @@ function renderMe() {
   const me = people.find(p => p.id === meId);
 
   if (me) {
-    box.innerHTML = `<div class="me-row">Ty w tej grupie: <strong>${esc(me.name)}</strong> <button class="btn-split" id="me-rename">✏️ zmień imię</button> <button class="btn-split" id="me-clear">to nie ja</button></div>`;
+    const phoneTxt = me.phone ? '📱 ' + esc(me.phone) : '📱 nr do przelewów';
+    box.innerHTML = `<div class="me-row">Ty w tej grupie: <strong>${esc(me.name)}</strong> <button class="btn-split" id="me-rename">✏️ zmień imię</button> <button class="btn-split" id="me-phone">${phoneTxt}</button> <button class="btn-split" id="me-clear">to nie ja</button></div>`;
     $('me-rename').onclick = async () => {
       const n = prompt('Twoje imię widoczne w grupie:', me.name);
       if (!n || !n.trim()) return;
       await db.from('people').update({ name: n.trim() }).eq('id', me.id);
+      loadAll();
+    };
+    $('me-phone').onclick = async () => {
+      const n = prompt('Twój numer telefonu (BLIK) — pokaże się osobom, które mają Ci oddać pieniądze.\nPozostaw puste, aby usunąć.', me.phone || '');
+      if (n === null) return;
+      await db.from('people').update({ phone: n.trim() || null }).eq('id', me.id);
       loadAll();
     };
     $('me-clear').onclick = () => { localStorage.removeItem('me-' + groupId); render(); };
@@ -273,6 +383,7 @@ function renderMe() {
     const { data, error } = await db.from('people').insert({ group_id: groupId, name }).select().single();
     if (error) return toast('Błąd: ' + error.message);
     localStorage.setItem('me-' + groupId, data.id);
+    db.from('activity').insert({ group_id: groupId, text: name + ' dołączył(a) do grupy 👋' }).then(() => {});
     toast('Witaj w grupie, ' + name + '! 🎉');
     loadAll();
   };
@@ -315,7 +426,8 @@ function render() {
     const curTxt = t.currency === 'PLN' ? 'zł' : t.currency;
     const plnTxt = t.currency !== 'PLN' ? (t.rate ? ` ≈ ${fmt(t.itemsTotal * t.rate + (t.tip || 0) * t.rate)} zł` : ' ⚠️ brak kursu') : '';
     const d = new Date(s.created_at);
-    a.innerHTML = `<strong>🧾 ${s.name || 'Rachunek'}</strong><span class="muted small"> · ${d.toLocaleDateString('pl-PL')} · ${fmt(t.itemsTotal + (t.tip || 0))} ${curTxt}${plnTxt}</span>`;
+    const catIcon = CATS[s.category] || '🧾';
+    a.innerHTML = `<strong>${catIcon} ${esc(s.name || 'Rachunek')}</strong><span class="muted small"> · ${d.toLocaleDateString('pl-PL')} · ${fmt(t.itemsTotal + (t.tip || 0))} ${curTxt}${plnTxt}</span>`;
     const del = document.createElement('button');
     del.className = 'btn-del';
     del.textContent = '✕';
@@ -324,7 +436,57 @@ function render() {
     rl.appendChild(row);
   }
 
+  renderQePayer();
+  renderCatChart();
+  renderActivity();
   renderGroupSummary();
+}
+
+function renderQePayer() {
+  const box = $('qe-payer');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!qePayerId) {
+    const meId = localStorage.getItem('me-' + groupId);
+    if (people.some(p => p.id === meId)) qePayerId = meId;
+  }
+  for (const p of people) {
+    const chip = document.createElement('button');
+    chip.className = 'chip assignable' + (qePayerId === p.id ? ' on' : '');
+    chip.textContent = p.name;
+    chip.onclick = () => { qePayerId = p.id; renderQePayer(); };
+    box.appendChild(chip);
+  }
+}
+
+function renderCatChart() {
+  const box = $('cat-chart');
+  if (!box) return;
+  box.innerHTML = '';
+  const totals = categoryTotals();
+  const entries = Object.entries(totals).filter(([, v]) => v > 0.005).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) { box.innerHTML = '<p class="muted small">Brak wydatków.</p>'; return; }
+  const max = entries[0][1];
+  for (const [cat, val] of entries) {
+    const row = document.createElement('div');
+    row.className = 'cat-row';
+    row.innerHTML = `<span class="cat-label">${CATS[cat] || '📦'} ${esc(cat)}</span><div class="cat-track"><div class="cat-bar" style="width:${Math.max(4, Math.round(val / max * 100))}%"></div></div><span class="cat-val">${fmt(val)} zł</span>`;
+    box.appendChild(row);
+  }
+}
+
+function renderActivity() {
+  const box = $('activity-list');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!activity.length) { box.innerHTML = '<p class="muted small">Brak aktywności.</p>'; return; }
+  for (const a of activity) {
+    const d = new Date(a.created_at);
+    const row = document.createElement('div');
+    row.className = 'act-row';
+    row.innerHTML = `<span class="muted small">${d.toLocaleDateString('pl-PL')} ${d.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}</span> ${esc(a.text)}`;
+    box.appendChild(row);
+  }
 }
 
 function renderGroupSummary() {
@@ -380,12 +542,81 @@ function renderGroupSummary() {
     h.textContent = 'Kto komu oddaje';
     setBox.appendChild(h);
     for (const tr of transfers) {
+      const toPerson = people.find(p => p.name === tr.to);
+      const phone = toPerson && toPerson.phone ? ` <span class="muted small">📱 ${esc(toPerson.phone)}</span>` : '';
       const row = document.createElement('div');
       row.className = 'settle-row';
-      row.innerHTML = `<span>${tr.from} → ${tr.to}</span><strong>${fmt(tr.amount)} zł</strong>`;
+      row.innerHTML = `<span>${esc(tr.from)} → ${esc(tr.to)}${phone}</span><span class="settle-actions"><strong>${fmt(tr.amount)} zł</strong> <button class="btn-small settle-done">✓ oddane</button></span>`;
+      row.querySelector('.settle-done').onclick = () => {
+        const fromP = people.find(p => p.name === tr.from);
+        if (fromP && toPerson) markSettled(fromP.id, toPerson.id, tr.amount);
+      };
       setBox.appendChild(row);
     }
   }
+
+  // lista dokonanych splat
+  const sBox = $('settled-list');
+  if (sBox) {
+    sBox.innerHTML = '';
+    if (settlements.length) {
+      const h2 = document.createElement('h3');
+      h2.className = 'settle-title';
+      h2.textContent = 'Spłacone ✓';
+      sBox.appendChild(h2);
+      for (const st of settlements) {
+        const f = people.find(p => p.id === st.from_person);
+        const to = people.find(p => p.id === st.to_person);
+        if (!f || !to) continue;
+        const row = document.createElement('div');
+        row.className = 'settle-row settled';
+        row.innerHTML = `<span>✓ ${esc(f.name)} → ${esc(to.name)}</span><span class="settle-actions"><strong>${fmt(Number(st.amount))} zł</strong> <button class="btn-del settle-undo">✕</button></span>`;
+        row.querySelector('.settle-undo').onclick = () => undoSettlement(st.id);
+        sBox.appendChild(row);
+      }
+    }
+  }
+}
+
+// ---------- eksport CSV ----------
+function exportCsv() {
+  const t = groupTotals();
+  const lines = [];
+  const sep = ';';
+  lines.push(['Grupa', group.name].join(sep));
+  lines.push([]);
+  lines.push(['PARAGONY', 'Data', 'Kategoria', 'Waluta', 'Kwota', 'Kwota PLN'].join(sep));
+  for (const s of sessions) {
+    const ts = sessionTotals(s);
+    const total = ts.itemsTotal + (ts.tip || 0);
+    lines.push([
+      '"' + (s.name || 'Rachunek').replace(/"/g, '""') + '"',
+      new Date(s.created_at).toLocaleDateString('pl-PL'),
+      s.category || 'inne',
+      ts.currency,
+      total.toFixed(2).replace('.', ','),
+      ts.rate ? (total * ts.rate).toFixed(2).replace('.', ',') : 'brak kursu'
+    ].join(sep));
+  }
+  lines.push([]);
+  lines.push(['OSOBA', 'Wydal PLN', 'Zaplacil PLN', 'Saldo PLN'].join(sep));
+  for (const p of people) {
+    const net = t.paidPln[p.id] - t.owedPln[p.id];
+    lines.push([p.name, t.owedPln[p.id].toFixed(2).replace('.', ','), t.paidPln[p.id].toFixed(2).replace('.', ','), net.toFixed(2).replace('.', ',')].join(sep));
+  }
+  const transfers = computeTransfers(t);
+  if (transfers.length) {
+    lines.push([]);
+    lines.push(['DO ODDANIA', 'Komu', 'Kwota PLN'].join(sep));
+    for (const tr of transfers) lines.push([tr.from, tr.to, tr.amount.toFixed(2).replace('.', ',')].join(sep));
+  }
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (group.name || 'wyjazd').replace(/[^\w\dąęółśżźćń -]/gi, '') + '-rozliczenie.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('CSV pobrany ⬇️');
 }
 
 function computeTransfers(t) {

@@ -73,6 +73,14 @@
         <option>CZK</option><option>HUF</option><option>CHF</option><option>NOK</option>
         <option>SEK</option><option>DKK</option><option>HRK</option><option>TRY</option>
       </select>
+      <select id="category">
+        <option value="jedzenie">🍕 jedzenie</option>
+        <option value="transport">🚗 transport</option>
+        <option value="nocleg">🏨 nocleg</option>
+        <option value="rozrywka">🎉 rozrywka</option>
+        <option value="zakupy">🛒 zakupy</option>
+        <option value="inne">📦 inne</option>
+      </select>
       <input type="number" id="fx-rate" min="0" step="0.0001" inputmode="decimal" class="hidden" title="Kurs">
       <span id="fx-label" class="small muted hidden"></span>
     </div>
@@ -94,7 +102,10 @@
   <section class="card">
     <h2>3. Pozycje <span class="muted small">— dotknij imienia, by przypisać</span></h2>
     <div id="items-list"></div>
-    <button id="btn-add-item" class="btn-small">➕ Dodaj pozycję ręcznie</button>
+    <div class="row">
+      <button id="btn-add-item" class="btn-small">➕ Dodaj pozycję ręcznie</button>
+      <button id="btn-all-assign" class="btn-small">👥 Wszyscy na wszystko</button>
+    </div>
   </section>
 
   <section class="card">
