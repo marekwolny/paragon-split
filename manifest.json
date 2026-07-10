@@ -1,0 +1,15 @@
+{
+  "name": "ParagonSplit — podziel rachunek",
+  "short_name": "ParagonSplit",
+  "description": "Podziel rachunek na podstawie zdjęcia paragonu",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f4f7",
+  "theme_color": "#4f46e5",
+  "lang": "pl",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
