@@ -157,6 +157,11 @@ button {
   border-left-color: #f59e0b;
 }
 
+/* pozycja wielosztukowa przypisana czesciowo: niebieski pasek, bez wyszarzenia */
+.item.partial {
+  border-left-color: #3b82f6;
+}
+
 .item-top { display: flex; gap: 6px; align-items: center; }
 .item-top input.i-name { flex: 1; }
 .item-top input.i-qty { width: 52px; text-align: center; }

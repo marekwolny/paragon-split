@@ -299,9 +299,15 @@ function renderItems() {
     return;
   }
   for (const item of items) {
-    const assigned = assignments.filter(a => a.item_id === item.id).map(a => a.person_id);
+    const itemAssignments = assignments.filter(a => a.item_id === item.id);
+    const assigned = itemAssignments.map(a => a.person_id);
+    const totalSh = itemAssignments.reduce((s, a) => s + (a.shares || 1), 0);
+    const q = Math.max(1, Math.round(item.qty));
+    // zielony dopiero gdy udzialy pokrywaja liczbe sztuk (przy 1 szt. wystarczy ktokolwiek)
+    let state = ' unassigned';
+    if (itemAssignments.length) state = (q > 1 && totalSh < q) ? ' partial' : ' done';
     const div = document.createElement('div');
-    div.className = 'item' + (assigned.length ? ' done' : ' unassigned');
+    div.className = 'item' + state;
 
     const top = document.createElement('div');
     top.className = 'item-top';
