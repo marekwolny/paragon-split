@@ -97,6 +97,71 @@ function bindUI() {
   });
   $('tip-prop').onclick = () => setTipMode('proportional');
   $('tip-equal').onclick = () => setTipMode('equal');
+  $('btn-expand-all').onclick = toggleAllDetails;
+  $('btn-copy-summary').onclick = copySummary;
+}
+
+function toggleAllDetails() {
+  const all = document.querySelectorAll('#summary .person-details');
+  if (!all.length) return;
+  const anyHidden = [...all].some(d => d.classList.contains('hidden'));
+  all.forEach(d => d.classList.toggle('hidden', !anyHidden));
+  document.querySelectorAll('#summary .summary-row.clickable').forEach(r => r.classList.toggle('open', anyHidden));
+  $('btn-expand-all').textContent = anyHidden ? '▴ Zwiń wszystkich' : '▾ Rozwiń wszystkich';
+}
+
+// pelny tekst rozliczenia do wklejenia na czacie
+function buildSummaryText() {
+  const t = computeTotals();
+  const lines = ['🧾 Rozliczenie rachunku', ''];
+  for (const p of people) {
+    lines.push(`${p.name} — do zapłaty ${fmt(t.owed[p.id])} zł`);
+    for (const item of items) {
+      const as = assignments.filter(a => a.item_id === item.id);
+      const mine = as.find(a => a.person_id === p.id);
+      if (!mine) continue;
+      const totalSh = as.reduce((s, a) => s + (a.shares || 1), 0);
+      const cost = item.qty * item.unit_price * (mine.shares || 1) / totalSh;
+      const shareTxt = totalSh > 1 ? ` (${mine.shares || 1}/${totalSh})` : '';
+      lines.push(`  • ${item.name}${shareTxt}: ${fmt(cost)} zł`);
+    }
+    if (t.tipShares[p.id] > 0.005) lines.push(`  • napiwek: ${fmt(t.tipShares[p.id])} zł`);
+    lines.push('');
+  }
+  lines.push(`Razem: ${fmt(t.grand)} zł`);
+  if (t.unassignedSum > 0.005) lines.push(`⚠️ Nieprzypisane: ${fmt(t.unassignedSum)} zł`);
+
+  if (payments.length) {
+    const paid = {};
+    for (const p of people) paid[p.id] = 0;
+    for (const pay of payments) if (paid[pay.person_id] !== undefined) paid[pay.person_id] += Number(pay.amount) || 0;
+    const nets = people.map(p => ({ name: p.name, net: Math.round((paid[p.id] - t.owed[p.id]) * 100) / 100 }));
+    const debtors = nets.filter(x => x.net < -0.005).map(x => ({ ...x, net: -x.net })).sort((a, b) => b.net - a.net);
+    const creditors = nets.filter(x => x.net > 0.005).sort((a, b) => b.net - a.net);
+    if (debtors.length && creditors.length) {
+      lines.push('', 'Kto komu oddaje:');
+      let di = 0, ci = 0;
+      while (di < debtors.length && ci < creditors.length) {
+        const amount = Math.min(debtors[di].net, creditors[ci].net);
+        if (amount > 0.005) lines.push(`  ${debtors[di].name} → ${creditors[ci].name}: ${fmt(amount)} zł`);
+        debtors[di].net -= amount;
+        creditors[ci].net -= amount;
+        if (debtors[di].net <= 0.005) di++;
+        if (creditors[ci].net <= 0.005) ci++;
+      }
+    }
+  }
+  return lines.join('\n');
+}
+
+async function copySummary() {
+  if (!people.length || !items.length) return toast('Brak danych do rozliczenia');
+  try {
+    await navigator.clipboard.writeText(buildSummaryText());
+    toast('Rozliczenie skopiowane 📋 — wklej na czacie');
+  } catch {
+    toast('Nie udało się skopiować');
+  }
 }
 
 async function setTipMode(mode) {

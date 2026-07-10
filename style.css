@@ -218,6 +218,9 @@ button {
 .payer-row .payer-name { min-width: 90px; font-weight: 500; }
 .payer-row input { max-width: 120px; text-align: right; }
 
+.summary-actions { margin-top: 14px; }
+.summary-actions button { flex: 1; }
+
 .settle-title { font-size: 0.95rem; margin: 14px 0 6px; }
 .settle-row {
   display: flex;
