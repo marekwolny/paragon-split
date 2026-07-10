@@ -1,4 +1,5 @@
 // Vercel Serverless Function - wywoluje Gemini API (klucz w env var GEMINI_API_KEY)
+// Retry + fallback: gemini-2.5-flash -> gemini-2.5-flash-lite (przy 503/429)
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -12,19 +13,30 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Brak obrazu' });
   }
   const prompt = 'Przeanalizuj zdjecie paragonu (rachunku) z restauracji lub sklepu. Wyodrebnij WYLACZNIE pozycje zakupow. Pomin sumy, podatki, rabaty calosciowe, dane sklepu. Dla kazdej pozycji podaj: name (nazwa pozycji, popraw oczywiste bledy OCR, zachowaj polski jezyk), qty (ilosc sztuk jako liczba, np. przy "4x Piwo" qty=4), unit_price (cena za sztuke w zlotych jako liczba; jesli na paragonie jest tylko cena laczna pozycji, podziel ja przez qty). Zwroc czysty JSON: {"items":[{"name":"...","qty":1,"unit_price":12.50}]}. Jesli to nie jest paragon, zwroc {"items":[]}.';
+  const payload = JSON.stringify({
+    contents: [{ parts: [ { text: prompt }, { inline_data: { mime_type: mimeType || 'image/jpeg', data: image } } ] }],
+    generationConfig: { response_mime_type: 'application/json', temperature: 0.1 }
+  });
+  const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-flash-lite', 'gemini-2.5-flash'];
   try {
-    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [ { text: prompt }, { inline_data: { mime_type: mimeType || 'image/jpeg', data: image } } ] }],
-        generationConfig: { response_mime_type: 'application/json', temperature: 0.1 }
-      })
-    });
-    if (!r.ok) {
-      const errText = await r.text();
-      console.error('Gemini error:', errText);
-      return res.status(502).json({ error: 'Blad Gemini API', detail: errText.slice(0, 500) });
+    let r = null;
+    let errText = '';
+    for (let i = 0; i < models.length; i++) {
+      r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + models[i] + ':generateContent?key=' + apiKey, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload
+      });
+      if (r.ok) break;
+      errText = await r.text();
+      console.error('Gemini error (' + models[i] + ', status ' + r.status + '):', errText.slice(0, 300));
+      if (r.status !== 503 && r.status !== 429 && r.status !== 500) break;
+      if (i < models.length - 1) {
+        await new Promise(function(resolve) { setTimeout(resolve, 2000); });
+      }
+    }
+    if (!r || !r.ok) {
+      return res.status(502).json({ error: 'Gemini jest chwilowo przeciazone - sprobuj ponownie za minute', detail: errText.slice(0, 500) });
     }
     const data = await r.json();
     const text = (data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text) || '{"items":[]}';
