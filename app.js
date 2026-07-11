@@ -63,7 +63,7 @@ async function init() {
 
   if (!sessionId) {
     $('view-landing').classList.remove('hidden');
-    $('btn-new').onclick = createSession;
+    $('btn-new').onclick = () => createSession(); // bez argumentu! (event to nie groupId)
     initLanding();
     return;
   }
