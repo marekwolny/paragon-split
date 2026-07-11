@@ -268,7 +268,8 @@ button {
 }
 .settle-row strong { color: var(--accent); }
 
-.header-btns { display: flex; gap: 6px; }
+.header-btns { display: flex; gap: 6px; align-items: center; }
+.home-btn { text-decoration: none; line-height: 1.4; }
 .space-between { justify-content: space-between; }
 
 #group-backlink, #home-backlink { margin-bottom: 10px; }

@@ -25,6 +25,7 @@
     'Nazwa wyjazdu, np. Chorwacja 2026': 'Trip name, e.g. Croatia 2026',
     'Szybki pojedynczy rachunek bez grupy i logowania:': 'Quick single bill — no group, no sign-in:',
     '➕ Nowy rachunek': '➕ New bill',
+    'Rachunki bez grupy są przechowywane 14 dni.': 'Bills without a group are kept for 14 days.',
     'Zaloguj się, aby zobaczyć swoje grupy. Do cudzej grupy dołączysz przez otrzymany link.': 'Sign in to see your groups. Join others’ groups via a shared link.',
     'Brak grup — utwórz pierwszą poniżej.': 'No groups yet — create one below.',
     ' (dołączono z linku)': ' (joined via link)',
