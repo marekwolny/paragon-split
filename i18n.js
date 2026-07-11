@@ -111,6 +111,7 @@
     'Wpisz, czego dotyczy wydatek': 'Describe the expense',
     'Wpisz kwotę': 'Enter the amount',
     'Najpierw dodaj uczestników': 'Add participants first',
+    'Najpierw dodaj osoby': 'Add people first',
     'Zaznacz, kto zapłacił': 'Select who paid',
     'jedzenie': 'food', 'transport': 'transport', 'nocleg': 'lodging', 'rozrywka': 'fun', 'zakupy': 'shopping', 'inne': 'other',
     '🍕 jedzenie': '🍕 food', '🚗 transport': '🚗 transport', '🏨 nocleg': '🏨 lodging', '🎉 rozrywka': '🎉 fun', '🛒 zakupy': '🛒 shopping', '📦 inne': '📦 other',

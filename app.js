@@ -783,7 +783,7 @@ function renderPayers() {
   rowsBox.innerHTML = '';
 
   if (!people.length) {
-    chipsBox.innerHTML = '<span class="muted small">Najpierw dodaj osoby</span>';
+    chipsBox.innerHTML = '<span class="muted small">' + t('Najpierw dodaj osoby') + '</span>';
     return;
   }
 
