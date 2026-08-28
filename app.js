@@ -1063,11 +1063,31 @@ function renderSettlement(tot) {
   h.textContent = t('Rozliczenie');
   box.appendChild(h);
 
-  if (Math.abs(paidTotal - tot.billTotal) > 0.01) {
+  const diff = Math.round((paidTotal - tot.billTotal) * 100) / 100;
+  if (Math.abs(diff) > 0.01) {
     const info = document.createElement('p');
     info.className = 'warn';
-    info.textContent = `⚠️ Wpłaty (${fmtC(paidTotal)}) różnią się od rachunku (${fmtC(tot.billTotal)}) — popraw kwoty.`;
+    info.textContent = diff > 0
+      ? `⚠️ Wyłożono ${fmtC(paidTotal)}, a rachunek to ${fmtC(tot.billTotal)} — brakuje ${fmtC(diff)}.`
+      : `⚠️ Wyłożono ${fmtC(paidTotal)}, a rachunek to ${fmtC(tot.billTotal)} — o ${fmtC(-diff)} za mało.`;
     box.appendChild(info);
+
+    // nadwyzka to najczesciej napiwek, ktorego nie ma na paragonie — jednym tapnieciem do pola napiwku
+    if (diff > 0.005) {
+      const btn = document.createElement('button');
+      btn.className = 'btn-small';
+      btn.textContent = `➕ ${t('Dopisz różnicę do napiwku')} (${fmtC(diff)})`;
+      btn.title = t('Jeśli to nie napiwek, tylko pominięta pozycja — dodaj ją w sekcji 3.');
+      btn.onclick = async () => {
+        const newTip = Math.round(((Number(session.tip) || 0) + diff) * 100) / 100;
+        try {
+          await api.updateSession(sessionId, { tip: newTip });
+          toast(t('Napiwek') + ': ' + fmtC(newTip));
+          synced();
+        } catch (e) { toast('Błąd: ' + e.message); }
+      };
+      box.appendChild(btn);
+    }
   }
 
   // net > 0: nadplacil (dostaje zwrot), net < 0: oddaje

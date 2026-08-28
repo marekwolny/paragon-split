@@ -79,6 +79,8 @@
     'Zmień nazwę': 'Rename',
     'rozliczony': 'settled',
     'wpłaty': 'paid',
+    'Dopisz różnicę do napiwku': 'Add the difference as tip',
+    'Jeśli to nie napiwek, tylko pominięta pozycja — dodaj ją w sekcji 3.': 'If it is not a tip but a missed item, add it in section 3 instead.',
     'suma': 'bill',
     'poz. bez osoby': 'items with nobody assigned',
     'pusty — brak pozycji': 'empty — no items',
