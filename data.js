@@ -333,3 +333,21 @@ export function announce(ch) {
   if (!ch) return;
   try { ch.send({ type: 'broadcast', event: 'sync', payload: {} }); } catch { /* trudno */ }
 }
+
+// ---------- diagnostyka dla stopki z wersja ----------
+// Odpowiada na pytanie "czy to, co widze, jest faktycznie wgrane i czy SQL poszedl".
+export async function diag() {
+  const out = { rpc: false, origName: false, tipPayers: false };
+
+  const r = await db.rpc('get_session_bundle', { sid: '00000000-0000-0000-0000-000000000000' });
+  out.rpc = !(r.error && isMissing(r.error));
+
+  const a = await db.from('items').select('orig_name').limit(1);
+  out.origName = !(a.error && /orig_name/i.test(a.error.message || ''));
+
+  const b = await db.from('sessions').select('tip_payers').limit(1);
+  out.tipPayers = !(b.error && /tip_payers/i.test(b.error.message || ''));
+
+  return out;
+}
+window.__psDiag = diag;

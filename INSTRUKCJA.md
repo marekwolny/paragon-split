@@ -123,3 +123,15 @@ Skrypt można uruchamiać wielokrotnie. Na końcu ma zakomentowany blok wycofani
 Efekt uboczny: Realtime przez `postgres_changes` respektuje RLS, więc po zamknięciu tabel
 przestałby cokolwiek dostarczać. Zamiast tego klienci rozgłaszają zmiany kanałem broadcast,
 a dane odświeżają się też przy powrocie do karty.
+
+## Stopka z wersją
+
+Na dole każdej strony jest szara linijka `ParagonSplit <numer wersji> ⓘ`. Dotknięcie jej
+rozwija diagnostykę: numer wersji pliku, nazwę cache PWA, stan service workera oraz to,
+czy baza działa już przez RPC i czy kolumny `items.orig_name` i `sessions.tip_payers` istnieją.
+
+Dzięki temu od razu widać, czy przeglądarka pokazuje nową paczkę, czy starą z cache.
+
+**Przy każdym deployu podbij `number` w `version.js`** (i cache `CACHE` w `sw.js`, jeśli
+zmieniały się pliki statyczne). Bez tego stopka pokaże stary numer i nie będzie po niej widać,
+że coś się zmieniło.
