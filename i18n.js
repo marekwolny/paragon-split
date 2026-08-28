@@ -76,6 +76,8 @@
     'Usuń osobę': 'Remove person',
     'Nazwa z paragonu — dotknij, aby jej użyć': 'Name as printed on the receipt — tap to use it',
     'rozdzielone': 'split up',
+    'Zmień nazwę': 'Rename',
+    'Nazwa rachunku, np. Taverna Kujtimi': 'Bill name, e.g. Taverna Kujtimi',
 
     // grupa
     'Nazwa wyjazdu': 'Trip name',

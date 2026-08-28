@@ -455,11 +455,28 @@ function render() {
     const d = new Date(s.created_at);
     const catIcon = CATS[s.category] || '🧾';
     a.innerHTML = `<strong>${catIcon} ${esc(s.name || 'Rachunek')}</strong><span class="muted small"> · ${d.toLocaleDateString('pl-PL')} · ${fmt(t.itemsTotal + (t.tip || 0))} ${curTxt}${plnTxt}</span>`;
+    const ren = document.createElement('button');
+    ren.className = 'btn-rename';
+    ren.textContent = '✏️';
+    ren.title = t('Zmień nazwę');
+    ren.onclick = async (e) => {
+      e.preventDefault();
+      const n = prompt('Nazwa paragonu:', s.name || 'Rachunek');
+      if (n === null) return;
+      const name = n.trim();
+      if (!name || name === s.name) return;
+      try {
+        await api.updateSession(s.id, { name });
+        logActivity('zmienił(a) nazwę paragonu na "' + name + '"');
+        synced();
+      } catch (err) { toast('Błąd: ' + err.message); }
+    };
+
     const del = document.createElement('button');
     del.className = 'btn-del';
     del.textContent = '✕';
     del.onclick = (e) => { e.preventDefault(); removeReceipt(s.id); };
-    row.append(a, del);
+    row.append(a, ren, del);
     rl.appendChild(row);
   }
 

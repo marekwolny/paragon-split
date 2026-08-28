@@ -258,6 +258,11 @@ function bindUI() {
   $('btn-add-item').onclick = addItemManual;
   $('btn-all-assign').onclick = assignEveryoneToEverything;
   $('file-input').addEventListener('change', onPhoto);
+  $('session-name').addEventListener('input', debounce(async (e) => {
+    const name = e.target.value.trim() || 'Rachunek';
+    try { await api.updateSession(sessionId, { name }); api.announce(chan); }
+    catch (err) { toast('Błąd: ' + err.message); }
+  }, 600));
   const retryBtn = $('btn-retry-ai');
   if (retryBtn) retryBtn.onclick = analyzePhoto;
   $('category').addEventListener('change', async (e) => {
@@ -691,6 +696,9 @@ function render() {
     }
     return;
   }
+
+  const sn = $('session-name');
+  if (sn && document.activeElement !== sn) sn.value = session.name || '';
 
   renderPeople();
   renderReceipts();

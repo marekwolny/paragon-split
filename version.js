@@ -3,7 +3,7 @@
 // PODBIJ `number` PRZY KAZDYM DEPLOYU. Stopka pokazuje ten numer, wiec od razu widac,
 // czy przegladarka ma nowa wersje, czy stara z cache PWA.
 window.APP_VERSION = {
-  number: '2026.08.28.5',
+  number: '2026.08.28.6',
   date: '2026-08-28',
   notes: 'napiwek spojny z grupa, waluta wszedzie, retry AI, tlumaczenie pozycji, platnicy napiwku, auto-nazwa i kategoria, dostep przez RPC'
 };
