@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ParagonSplit — przeniesienie wyjazdu na nową wersję</title>
+<meta name="theme-color" content="#4f46e5">
+<link rel="stylesheet" href="style.css">
+<style>
+  .log { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; max-height: 55vh; overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-top: 10px; }
+  .log .ok { color: #15803d; }
+  .log .err { color: #b91c1c; }
+  .log .warn { color: #b45309; }
+  .log .step { font-weight: 700; display: block; margin-top: 8px; }
+  .opt { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 14px; }
+  .opt input[type="checkbox"] { width: 18px; height: 18px; }
+  select#group-pick { width: 100%; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🔁 Przeniesienie wyjazdu</h1>
+  <div class="header-btns"><a href="index.html" class="btn-small home-btn">🏠</a></div>
+</header>
+
+<main>
+  <section class="card">
+    <p class="muted small">
+      Narzędzie robi kopię wyjazdu na nowej wersji aplikacji: stary wyjazd dostaje dopisek
+      <strong>„ - old"</strong> i zostaje nietknięty, a obok powstaje nowy o tej samej nazwie —
+      z ponownie przeanalizowanymi paragonami (oryginalne nazwy pozycji + tłumaczenie,
+      auto-nazwa lokalu, auto-kategoria), z przepisanymi osobami, przypisaniami i wpłatami.
+    </p>
+    <p class="warn">Nic nie jest kasowane. Zacznij od podglądu — dopiero potem odznacz „tylko podgląd".</p>
+  </section>
+
+  <section class="card" id="auth-card">
+    <div id="auth-out">
+      <p class="muted small">Analiza AI wymaga zalogowania (albo własnego klucza Gemini zapisanego w aplikacji).</p>
+      <button id="btn-login" class="btn-primary">Zaloguj przez Google</button>
+    </div>
+    <div id="auth-in" class="hidden">
+      <div class="row space-between">
+        <span id="auth-email" class="small"></span>
+        <button id="btn-logout" class="btn-small">Wyloguj</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" id="run-card">
+    <h2>Wyjazd do przeniesienia</h2>
+    <select id="group-pick"><option value="">— wczytywanie —</option></select>
+    <div class="opt"><input type="checkbox" id="dry" checked><label for="dry">Tylko podgląd (nic nie zapisuj)</label></div>
+    <div class="opt"><input type="checkbox" id="reai" checked><label for="reai">Przeanalizuj paragony ponownie przez AI</label></div>
+    <button id="btn-run" class="btn-primary">Uruchom</button>
+    <div id="log" class="log"></div>
+    <div class="row summary-actions">
+      <button id="btn-copy" class="btn-small">📋 Kopiuj log</button>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="hidden"></div>
+
+<script src="config.js"></script>
+<script type="module">
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
+const { SUPABASE_URL, SUPABASE_ANON_KEY } = window.APP_CONFIG;
+const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = (id) => document.getElementById(id);
+
+let user = null;
+let busy = false;
+
+function log(msg, cls) {
+  const el = document.createElement('span');
+  if (cls) el.className = cls;
+  el.textContent = msg + '\n';
+  $('log').appendChild(el);
+  $('log').scrollTop = $('log').scrollHeight;
+}
+const step = (m) => log('\n' + m, 'step');
+const money = (n) => (Math.round(n * 100) / 100).toFixed(2);
+
+// ---------- logowanie ----------
+$('btn-login').onclick = async () => {
+  const { error } = await db.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.href } });
+  if (error) log('Błąd logowania: ' + error.message, 'err');
+};
+$('btn-logout').onclick = async () => { await db.auth.signOut(); location.reload(); };
+$('btn-copy').onclick = async () => {
+  try { await navigator.clipboard.writeText($('log').innerText); log('(log skopiowany)', 'ok'); }
+  catch { log('(nie udało się skopiować)', 'err'); }
+};
+
+(async function init() {
+  const { data } = await db.auth.getUser();
+  user = data.user || null;
+  $('auth-out').classList.toggle('hidden', !!user);
+  $('auth-in').classList.toggle('hidden', !user);
+  if (user) $('auth-email').textContent = '👤 ' + (user.email || 'zalogowano');
+  await loadGroups();
+  await checkColumns();
+})();
+
+async function loadGroups() {
+  const sel = $('group-pick');
+  sel.innerHTML = '';
+  if (!user) {
+    sel.innerHTML = '<option value="">— zaloguj się, aby zobaczyć swoje wyjazdy —</option>';
+    return;
+  }
+  const { data, error } = await db.from('groups').select('id,name,created_at').eq('owner', user.id).order('created_at', { ascending: false });
+  if (error) { sel.innerHTML = '<option value="">— błąd: ' + error.message + ' —</option>'; return; }
+  if (!data.length) { sel.innerHTML = '<option value="">— brak wyjazdów na tym koncie —</option>'; return; }
+  sel.innerHTML = '<option value="">— wybierz —</option>';
+  for (const g of data) {
+    const o = document.createElement('option');
+    o.value = g.id;
+    o.textContent = g.name + '  (' + new Date(g.created_at).toLocaleDateString('pl-PL') + ')';
+    sel.appendChild(o);
+  }
+}
+
+let HAS = { orig_name: false, tip_payers: false };
+async function checkColumns() {
+  const a = await db.from('items').select('orig_name').limit(1);
+  const b = await db.from('sessions').select('tip_payers').limit(1);
+  HAS.orig_name = !a.error;
+  HAS.tip_payers = !b.error;
+  if (!HAS.orig_name || !HAS.tip_payers) {
+    log('⚠️ Baza bez migracji — brakuje: ' + [!HAS.orig_name && 'items.orig_name', !HAS.tip_payers && 'sessions.tip_payers'].filter(Boolean).join(', '), 'warn');
+    log('   Uruchom migration-2026-08.sql w Supabase, inaczej oryginalne nazwy pozycji i płatnicy napiwku nie zostaną zapisani.', 'warn');
+  } else {
+    log('✅ Baza po migracji — komplet kolumn.', 'ok');
+  }
+}
+
+// ---------- pomocnicze ----------
+function downscale(blob) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const MAX = 1280;
+      const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * scale);
+      c.height = Math.round(img.height * scale);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL('image/jpeg', 0.8).split(',')[1]);
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = () => reject(new Error('nie udało się wczytać zdjęcia'));
+    img.src = URL.createObjectURL(blob);
+  });
+}
+
+async function aiParse(photoUrl) {
+  const blob = await fetch(photoUrl).then(r => { if (!r.ok) throw new Error('zdjęcie niedostępne (' + r.status + ')'); return r.blob(); });
+  const base64 = await downscale(blob);
+  const headers = { 'Content-Type': 'application/json' };
+  const { data: sess } = await db.auth.getSession();
+  if (sess && sess.session) headers.Authorization = 'Bearer ' + sess.session.access_token;
+  const userKey = localStorage.getItem('geminiKey') || undefined;
+  const r = await fetch('/api/parse-receipt', { method: 'POST', headers, body: JSON.stringify({ image: base64, mimeType: 'image/jpeg', userKey }) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || ('API ' + r.status));
+  return data;
+}
+
+const norm = (s) => String(s || '').toLowerCase().replace(/[^a-ząćęłńóśżź0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+function sim(a, b) {
+  a = norm(a); b = norm(b);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const A = new Set(a.split(' ')), B = new Set(b.split(' '));
+  let hit = 0;
+  for (const x of A) if (B.has(x)) hit++;
+  return hit / Math.max(A.size, B.size);
+}
+
+// dopasowanie starych pozycji do nowych: najpierw cena i ilość, potem podobieństwo nazwy
+function matchItems(oldItems, newItems) {
+  const used = new Set(), map = {};
+  for (const o of oldItems) {
+    let best = null, bestScore = 0;
+    for (const n of newItems) {
+      if (used.has(n.id)) continue;
+      let s = 0;
+      if (Math.abs(Number(n.unit_price) - Number(o.unit_price)) < 0.005) s += 3;
+      if (Math.round(n.qty) === Math.round(o.qty)) s += 1;
+      s += 2 * Math.max(sim(o.name, n.name), sim(o.name, n.orig_name));
+      if (s > bestScore) { bestScore = s; best = n; }
+    }
+    if (best && bestScore >= 2) { map[o.id] = best.id; used.add(best.id); }
+  }
+  return map;
+}
+
+// ---------- główny przebieg ----------
+$('btn-run').onclick = async () => {
+  if (busy) return;
+  const groupId = $('group-pick').value;
+  if (!groupId) return log('Wybierz wyjazd.', 'err');
+  const dry = $('dry').checked;
+  const reai = $('reai').checked;
+  busy = true;
+  $('btn-run').disabled = true;
+  try { await run(groupId, dry, reai); }
+  catch (e) { log('💥 PRZERWANE: ' + e.message, 'err'); }
+  busy = false;
+  $('btn-run').disabled = false;
+};
+
+async function run(groupId, dry, reai) {
+  $('log').innerHTML = '';
+  log(dry ? '=== PODGLĄD — nic nie zostanie zapisane ===' : '=== ZAPIS NA ŻYWO ===', dry ? 'warn' : 'ok');
+
+  const g = await db.rpc('get_group', { gid: groupId });
+  if (g.error || !g.data || !g.data.length) throw new Error('nie znaleziono wyjazdu');
+  const group = g.data[0];
+  log('Wyjazd: ' + group.name);
+
+  const [pRes, sRes] = await Promise.all([
+    db.from('people').select('*').eq('group_id', groupId).order('created_at'),
+    db.from('sessions').select('*').eq('group_id', groupId).order('created_at'),
+  ]);
+  const oldPeople = pRes.data || [];
+  const oldSessions = sRes.data || [];
+  const sIds = oldSessions.map(s => s.id);
+  let oldItems = [], oldAsg = [], oldPay = [];
+  if (sIds.length) {
+    const [i, a, p] = await Promise.all([
+      db.from('items').select('*').in('session_id', sIds).order('position'),
+      db.from('assignments').select('*').in('session_id', sIds),
+      db.from('payments').select('*').in('session_id', sIds),
+    ]);
+    oldItems = i.data || []; oldAsg = a.data || []; oldPay = p.data || [];
+  }
+  log(`Osoby: ${oldPeople.length} · paragony: ${oldSessions.length} · pozycje: ${oldItems.length} · przypisania: ${oldAsg.length} · wpłaty: ${oldPay.length}`);
+  const withPhoto = oldSessions.filter(s => Array.isArray(s.receipt_urls) && s.receipt_urls.length);
+  log(`Paragony ze zdjęciem: ${withPhoto.length} (te pójdą ponownie przez AI)`);
+  if (reai && !withPhoto.length) log('Brak zdjęć — pozycje zostaną przepisane bez zmian.', 'warn');
+
+  if (dry) {
+    step('Co się wydarzy po odznaczeniu podglądu:');
+    log(`1. „${group.name}" → „${group.name} - old"`);
+    log(`2. powstanie nowy wyjazd „${group.name}"`);
+    log(`3. przepisanie ${oldPeople.length} osób`);
+    for (const s of oldSessions) {
+      const items = oldItems.filter(i => i.session_id === s.id);
+      const photo = Array.isArray(s.receipt_urls) && s.receipt_urls.length;
+      const sum = items.reduce((t, i) => t + i.qty * i.unit_price, 0);
+      log(`   • ${s.name || 'Rachunek'} — ${items.length} poz., ${money(sum)} ${s.currency || 'PLN'}` + (photo && reai ? ' → AI' : ' → kopia 1:1'));
+    }
+    log('\nNic nie zapisano. Odznacz „tylko podgląd" i uruchom ponownie.', 'warn');
+    return;
+  }
+
+  if (!user) throw new Error('zaloguj się — nowy wyjazd musi mieć właściciela');
+
+  step('1/5 Zmiana nazwy starego wyjazdu');
+  const rn = await db.from('groups').update({ name: group.name + ' - old' }).eq('id', groupId);
+  if (rn.error) throw new Error('nie udało się zmienić nazwy: ' + rn.error.message);
+  log('✔ „' + group.name + ' - old"', 'ok');
+
+  step('2/5 Nowy wyjazd');
+  const ng = await db.from('groups').insert({ name: group.name, owner: user.id }).select().single();
+  if (ng.error) throw new Error('nie udało się utworzyć wyjazdu: ' + ng.error.message);
+  const newGroupId = ng.data.id;
+  log('✔ ' + group.name + '  (' + newGroupId + ')', 'ok');
+
+  step('3/5 Osoby');
+  const personMap = {};
+  for (const p of oldPeople) {
+    const row = { group_id: newGroupId, name: p.name };
+    if (p.phone) row.phone = p.phone;
+    const r = await db.from('people').insert(row).select().single();
+    if (r.error) { log('✖ ' + p.name + ': ' + r.error.message, 'err'); continue; }
+    personMap[p.id] = r.data.id;
+    log('✔ ' + p.name, 'ok');
+  }
+
+  step('4/5 Paragony');
+  const problems = [];
+  let n = 0;
+  for (const s of oldSessions) {
+    n++;
+    const label = `[${n}/${oldSessions.length}] ${s.name || 'Rachunek'}`;
+    const sItems = oldItems.filter(i => i.session_id === s.id);
+    const sAsg = oldAsg.filter(a => a.session_id === s.id);
+    const sPay = oldPay.filter(p => p.session_id === s.id);
+
+    const sessRow = {
+      group_id: newGroupId,
+      name: s.name,
+      currency: s.currency || 'PLN',
+      fx_rate: s.fx_rate,
+      paid_base: s.paid_base,
+      tip: s.tip || 0,
+      tip_mode: s.tip_mode || 'proportional',
+      category: s.category || 'inne',
+      receipt_urls: Array.isArray(s.receipt_urls) ? s.receipt_urls : [],
+    };
+    const ns = await db.from('sessions').insert(sessRow).select().single();
+    if (ns.error) { log(label + ' ✖ ' + ns.error.message, 'err'); problems.push(label + ': nie utworzono'); continue; }
+    const newSessionId = ns.data.id;
+
+    // pozycje: z AI (jeśli jest zdjęcie) albo kopia 1:1
+    let rows = null;
+    const photo = Array.isArray(s.receipt_urls) && s.receipt_urls.length ? s.receipt_urls[0] : null;
+    if (reai && photo) {
+      try {
+        const ai = await aiParse(photo);
+        const parsed = Array.isArray(ai.items) ? ai.items : [];
+        if (parsed.length) {
+          rows = parsed.map((it, idx) => {
+            const orig = String(it.name || '').trim();
+            const shown = String(it.name_pl || '').trim() || orig;
+            const row = { session_id: newSessionId, name: shown, qty: it.qty, unit_price: it.unit_price, position: idx };
+            if (HAS.orig_name && orig && orig !== shown) row.orig_name = orig;
+            return row;
+          });
+          const patch = {};
+          if (ai.merchant && (!s.name || /^Rachunek(\s+\d+)?$/i.test(String(s.name).trim()))) patch.name = ai.merchant;
+          if (ai.category && (!s.category || s.category === 'inne')) patch.category = ai.category;
+          if (Object.keys(patch).length) {
+            await db.from('sessions').update(patch).eq('id', newSessionId);
+            log(label + ' → AI: ' + parsed.length + ' poz.; ' + Object.entries(patch).map(([k, v]) => k + '=' + v).join(', '), 'ok');
+          } else {
+            log(label + ' → AI: ' + parsed.length + ' poz.', 'ok');
+          }
+          const oldSum = sItems.reduce((t, i) => t + i.qty * i.unit_price, 0);
+          const newSum = rows.reduce((t, i) => t + i.qty * i.unit_price, 0);
+          if (Math.abs(oldSum - newSum) > 0.5) {
+            log('   ⚠️ suma się różni: było ' + money(oldSum) + ', jest ' + money(newSum), 'warn');
+            problems.push(label + ': suma ' + money(oldSum) + ' → ' + money(newSum));
+          }
+        } else {
+          log(label + ' → AI nic nie rozpoznało, kopiuję stare pozycje', 'warn');
+        }
+      } catch (e) {
+        log(label + ' → AI: ' + e.message + ' — kopiuję stare pozycje', 'warn');
+        problems.push(label + ': AI nie zadziałało (' + e.message + ')');
+      }
+    }
+    if (!rows) {
+      rows = sItems.map((i, idx) => ({ session_id: newSessionId, name: i.name, qty: i.qty, unit_price: i.unit_price, position: i.position != null ? i.position : idx }));
+      if (!photo) log(label + ' → kopia 1:1 (' + rows.length + ' poz.)');
+    }
+
+    let ins = rows.length ? await db.from('items').insert(rows).select() : { data: [] };
+    if (ins.error && /orig_name/i.test(ins.error.message || '')) {
+      ins = await db.from('items').insert(rows.map(({ orig_name, ...r }) => r)).select();
+    }
+    if (ins.error) { log(label + ' ✖ pozycje: ' + ins.error.message, 'err'); problems.push(label + ': pozycje'); continue; }
+    const newItems = ins.data || [];
+
+    // przypisania: mapowanie starych pozycji na nowe
+    const map = matchItems(sItems, newItems);
+    const asgRows = [];
+    let lost = 0;
+    for (const a of sAsg) {
+      const ni = map[a.item_id], np = personMap[a.person_id];
+      if (!ni || !np) { lost++; continue; }
+      asgRows.push({ item_id: ni, person_id: np, session_id: newSessionId, shares: a.shares || 1 });
+    }
+    if (asgRows.length) {
+      const ra = await db.from('assignments').insert(asgRows);
+      if (ra.error) { log('   ✖ przypisania: ' + ra.error.message, 'err'); problems.push(label + ': przypisania'); }
+    }
+    if (lost) {
+      log('   ⚠️ ' + lost + ' przypisań bez pary — przypisz ręcznie', 'warn');
+      problems.push(label + ': ' + lost + ' przypisań do ręcznego poprawienia');
+    }
+
+    // wpłaty
+    const payRows = sPay
+      .filter(p => personMap[p.person_id])
+      .map(p => ({ session_id: newSessionId, person_id: personMap[p.person_id], amount: p.amount }));
+    if (payRows.length) {
+      const rp = await db.from('payments').insert(payRows);
+      if (rp.error) { log('   ✖ wpłaty: ' + rp.error.message, 'err'); problems.push(label + ': wpłaty'); }
+    }
+  }
+
+  step('5/5 Gotowe');
+  log('Nowy wyjazd: ' + location.origin + '/group.html?g=' + newGroupId, 'ok');
+  log('Stary został jako „' + group.name + ' - old" — nietknięty.');
+  if (problems.length) {
+    log('\nDo sprawdzenia ręcznie:', 'warn');
+    for (const p of problems) log('  • ' + p, 'warn');
+  } else {
+    log('Bez zastrzeżeń — wszystko przepisane.', 'ok');
+  }
+  await loadGroups();
+}
+</script>
+</body>
+</html>
