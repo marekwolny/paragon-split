@@ -78,6 +78,8 @@
     'rozdzielone': 'split up',
     'Zmień nazwę': 'Rename',
     'rozliczony': 'settled',
+    'wpłaty': 'paid',
+    'suma': 'bill',
     'poz. bez osoby': 'items with nobody assigned',
     'pusty — brak pozycji': 'empty — no items',
     'nie wiadomo, kto zapłacił': 'nobody marked as payer',

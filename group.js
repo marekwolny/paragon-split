@@ -431,6 +431,19 @@ function receiptStatus(s, st) {
     || (Array.isArray(s.tip_payers) && s.tip_payers.length);
   if (!hasPayer) return { cls: 'st-warn', icon: '⚠️', text: t('nie wiadomo, kto zapłacił') };
 
+  // wplacone (razem z napiwkiem wylozonym osobno) kontra to, co widnieje na rachunku
+  const paidSum = Object.keys(st.paid).reduce((sum, k) => sum + (Number(st.paid[k]) || 0), 0);
+  const bill = st.itemsTotal + (st.tip || 0);
+  const diff = Math.round((paidSum - bill) * 100) / 100;
+  if (Math.abs(diff) > 0.01) {
+    const cur = st.currency === 'PLN' ? 'zł' : st.currency;
+    return {
+      cls: 'st-warn', icon: '⚠️',
+      text: t('wpłaty') + ' ' + fmt(paidSum) + ' ' + cur + ' ≠ ' + t('suma') + ' ' + fmt(bill) + ' ' + cur
+            + ' (' + (diff > 0 ? '+' : '') + fmt(diff) + ')'
+    };
+  }
+
   if (!st.rate) return { cls: 'st-warn', icon: '⚠️', text: t('brak kursu') };
 
   return { cls: 'st-ok', icon: '✓', text: t('rozliczony') };
