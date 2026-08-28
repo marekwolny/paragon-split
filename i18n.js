@@ -77,6 +77,11 @@
     'Nazwa z paragonu — dotknij, aby jej użyć': 'Name as printed on the receipt — tap to use it',
     'rozdzielone': 'split up',
     'Zmień nazwę': 'Rename',
+    'rozliczony': 'settled',
+    'poz. bez osoby': 'items with nobody assigned',
+    'pusty — brak pozycji': 'empty — no items',
+    'nie wiadomo, kto zapłacił': 'nobody marked as payer',
+    'brak kursu': 'no exchange rate',
     'Nazwa rachunku, np. Taverna Kujtimi': 'Bill name, e.g. Taverna Kujtimi',
 
     // grupa

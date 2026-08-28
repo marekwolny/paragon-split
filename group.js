@@ -415,6 +415,27 @@ function renderMe() {
   box.appendChild(wrap);
 }
 
+// Czy paragon jest rozliczony: wszystkie pozycje przypisane do osob i wiadomo, kto zaplacil.
+function receiptStatus(s, st) {
+  const sItems = items.filter(i => i.session_id === s.id);
+  if (!sItems.length) return { cls: 'st-empty', icon: '○', text: t('pusty — brak pozycji') };
+
+  const sAsg = assignments.filter(a => a.session_id === s.id);
+  const assignedIds = new Set(sAsg.map(a => a.item_id));
+  const missing = sItems.filter(i => !assignedIds.has(i.id)).length;
+  if (missing) {
+    return { cls: 'st-warn', icon: '⚠️', text: missing + ' z ' + sItems.length + ' ' + t('poz. bez osoby') };
+  }
+
+  const hasPayer = payments.some(p => p.session_id === s.id)
+    || (Array.isArray(s.tip_payers) && s.tip_payers.length);
+  if (!hasPayer) return { cls: 'st-warn', icon: '⚠️', text: t('nie wiadomo, kto zapłacił') };
+
+  if (!st.rate) return { cls: 'st-warn', icon: '⚠️', text: t('brak kursu') };
+
+  return { cls: 'st-ok', icon: '✓', text: t('rozliczony') };
+}
+
 function render() {
   if (document.activeElement !== $('group-name-input')) $('group-name-input').value = group.name;
   $('group-title').textContent = '🏕️ ' + group.name;
@@ -445,16 +466,20 @@ function render() {
   rl.innerHTML = '';
   if (!sessions.length) rl.innerHTML = '<p class="muted small">' + t('Brak paragonów — dodaj pierwszy.') + '</p>';
   for (const s of sessions) {
-    const t = sessionTotals(s);
+    // UWAGA: nie nazywac tego `t` — przyslania globalna funkcje tlumaczen t()
+    const st = sessionTotals(s);
     const row = document.createElement('div');
     row.className = 'receipt-row';
     const a = document.createElement('a');
     a.href = 'index.html?s=' + s.id;
-    const curTxt = t.currency === 'PLN' ? 'zł' : t.currency;
-    const plnTxt = t.currency !== 'PLN' ? (t.rate ? ` ≈ ${fmt(t.itemsTotal * t.rate + (t.tip || 0) * t.rate)} zł` : ' ⚠️ brak kursu') : '';
+    const curTxt = st.currency === 'PLN' ? 'zł' : st.currency;
+    const plnTxt = st.currency !== 'PLN' ? (st.rate ? ` ≈ ${fmt(st.itemsTotal * st.rate + (st.tip || 0) * st.rate)} zł` : ' ⚠️ brak kursu') : '';
     const d = new Date(s.created_at);
     const catIcon = CATS[s.category] || '🧾';
-    a.innerHTML = `<strong>${catIcon} ${esc(s.name || 'Rachunek')}</strong><span class="muted small"> · ${d.toLocaleDateString('pl-PL')} · ${fmt(t.itemsTotal + (t.tip || 0))} ${curTxt}${plnTxt}</span>`;
+    const stat = receiptStatus(s, st);
+    a.innerHTML = `<strong>${catIcon} ${esc(s.name || 'Rachunek')}</strong>`
+      + `<span class="muted small"> · ${d.toLocaleDateString('pl-PL')} · ${fmt(st.itemsTotal + (st.tip || 0))} ${curTxt}${plnTxt}</span>`
+      + `<span class="receipt-status ${stat.cls}">${stat.icon} ${esc(stat.text)}</span>`;
     const ren = document.createElement('button');
     ren.className = 'btn-rename';
     ren.textContent = '✏️';
