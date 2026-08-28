@@ -437,7 +437,7 @@ function receiptStatus(s, st) {
   const paidSum = Object.keys(st.paid).reduce((sum, k) => sum + (Number(st.paid[k]) || 0), 0);
   const bill = st.itemsTotal + (st.tip || 0);
   const diff = Math.round((paidSum - bill) * 100) / 100;
-  if (Math.abs(diff) > 0.01) {
+  if (Math.abs(diff) > api.billTolerance(bill)) {
     const cur = st.currency === 'PLN' ? 'zł' : st.currency;
     return {
       cls: 'st-warn', icon: '⚠️',
@@ -614,7 +614,7 @@ function renderGroupSummary() {
     w.textContent = `⚠️ „${s.name || 'Rachunek'}" (${s.currency}) pominięty — brak kursu. Otwórz go i podaj kurs lub kwotę w PLN.`;
     box.appendChild(w);
   }
-  if (Math.abs(grandPaid - g.billPln) > 0.01 && grandPaid > 0) {
+  if (Math.abs(grandPaid - g.billPln) > api.billTolerance(g.billPln) && grandPaid > 0) {
     const w = document.createElement('p');
     w.className = 'warn';
     w.textContent = `⚠️ Suma wpłat (${fmt(grandPaid)} zł) ≠ suma z paragonów (${fmt(g.billPln)} zł) — sprawdź "kto zapłacił" w paragonach.`;

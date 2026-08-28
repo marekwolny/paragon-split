@@ -1064,7 +1064,7 @@ function renderSettlement(tot) {
   box.appendChild(h);
 
   const diff = Math.round((paidTotal - tot.billTotal) * 100) / 100;
-  if (Math.abs(diff) > 0.01) {
+  if (Math.abs(diff) > api.billTolerance(tot.billTotal)) {
     const info = document.createElement('p');
     info.className = 'warn';
     info.textContent = diff > 0

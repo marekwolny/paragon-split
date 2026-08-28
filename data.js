@@ -341,6 +341,13 @@ export function announce(ch) {
   try { ch.send({ type: 'broadcast', event: 'sync', payload: {} }); } catch { /* trudno */ }
 }
 
+// Prog, ponizej ktorego roznica miedzy wplatami a rachunkiem to zaokraglenie,
+// a nie blad: towary na wage i zaokraglenia kasy potrafia dac kilka jednostek roznicy.
+// 0,1% rachunku (minimum 2 grosze) — przy 2856 ALL to 2,86 ALL, przy 16300 ALL to 16 ALL.
+export function billTolerance(bill) {
+  return Math.max(0.02, Math.abs(Number(bill) || 0) * 0.001);
+}
+
 // ---------- diagnostyka dla stopki z wersja ----------
 // Odpowiada na pytanie "czy to, co widze, jest faktycznie wgrane i czy SQL poszedl".
 export async function diag() {
