@@ -873,6 +873,23 @@ function renderTip() {
   const cn = $('tip-cur');
   if (cn) cn.textContent = cur() === 'PLN' ? 'zł' : cur();
 
+  // kto faktycznie dzieli napiwek — osoby bez pozycji na tym rachunku sa pomijane,
+  // wiec warto to pokazac, zeby nie trzeba bylo tego zgadywac z podsumowania
+  const info = $('tip-who');
+  if (info) {
+    const tip = Number(session.tip) || 0;
+    if (tip > 0 && people.length) {
+      const tt = computeTotals();
+      const inTip = people.filter(p => tt.tipShares[p.id] > 0.005);
+      const outTip = people.filter(p => tt.tipShares[p.id] <= 0.005);
+      info.textContent = t('Napiwek dzielą') + ': ' + inTip.map(p => p.name).join(', ')
+        + (outTip.length ? '  ·  ' + outTip.map(p => p.name).join(', ') + ' ' + t('— bez pozycji na tym rachunku') : '');
+      info.classList.remove('hidden');
+    } else {
+      info.classList.add('hidden');
+    }
+  }
+
   const box = $('tip-payers');
   if (!box) return;
   box.innerHTML = '';
