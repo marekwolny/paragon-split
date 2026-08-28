@@ -31,7 +31,25 @@ export default async function handler(req, res) {
   if (!apiKey) {
     return res.status(403).json({ error: 'Analiza AI wymaga wlasnego klucza Gemini', needKey: true });
   }
-  const prompt = 'Przeanalizuj zdjecie paragonu (rachunku) z restauracji lub sklepu. Wyodrebnij WYLACZNIE pozycje zakupow. Pomin sumy, podatki, rabaty calosciowe, dane sklepu. Dla kazdej pozycji podaj: name (nazwa pozycji, popraw oczywiste bledy OCR, zachowaj polski jezyk), qty (ilosc sztuk jako liczba, np. przy "4x Piwo" qty=4), unit_price (cena za sztuke jako liczba; jesli na paragonie jest tylko cena laczna pozycji, podziel ja przez qty). Zwroc czysty JSON: {"items":[{"name":"...","qty":1,"unit_price":12.50}]}. Jesli to nie jest paragon, zwroc {"items":[]}.';
+  const prompt = [
+    'Przeanalizuj zdjecie paragonu (rachunku) z restauracji lub sklepu.',
+    '',
+    'Wyodrebnij pozycje zakupow. Pomin sumy, podatki, rabaty calosciowe, dane kontaktowe.',
+    'Dla KAZDEJ pozycji podaj:',
+    '- name: nazwa DOKLADNIE tak, jak jest wydrukowana na paragonie (zachowaj oryginalny jezyk i pisownie; popraw tylko oczywiste bledy odczytu OCR, np. brakujaca litere). NIE tlumacz tego pola.',
+    '- name_pl: ta sama pozycja przetlumaczona na jezyk polski, krotko i naturalnie (np. "Birra Korca" -> "Piwo Korca", "Tave kosi" -> "Zapiekanka jagnieca z jogurtem"). Jesli nazwa juz jest po polsku, powtorz ja bez zmian.',
+    '- qty: ilosc sztuk jako liczba (przy "4x Piwo" qty=4).',
+    '- unit_price: cena za JEDNA sztuke jako liczba; jesli na paragonie jest tylko cena laczna pozycji, podziel ja przez qty.',
+    '',
+    'Podaj tez:',
+    '- merchant: nazwa lokalu/sklepu z naglowka paragonu (bez formy prawnej typu Sp. z o.o., sh.p.k., Ltd; bez adresu). Jesli nie widac, pusty string.',
+    '- category: jedna z wartosci "jedzenie", "transport", "nocleg", "rozrywka", "zakupy", "inne" - dopasowana do charakteru calego paragonu (restauracja/bar/kawiarnia = jedzenie, taxi/paliwo/bilety = transport, hotel/apartament = nocleg, atrakcje/kluby/wycieczki = rozrywka, sklep/pamiatki = zakupy).',
+    '- currency: 3-literowy kod ISO waluty widocznej na paragonie (np. PLN, EUR, ALL, HRK). Jesli nie da sie ustalic, pusty string.',
+    '',
+    'Zwroc czysty JSON, bez komentarzy:',
+    '{"merchant":"...","category":"jedzenie","currency":"ALL","items":[{"name":"Birra Korca","name_pl":"Piwo Korca","qty":2,"unit_price":250}]}',
+    'Jesli to nie jest paragon, zwroc {"merchant":"","category":"inne","currency":"","items":[]}.'
+  ].join('\n');
   const payload = JSON.stringify({
     contents: [{ parts: [ { text: prompt }, { inline_data: { mime_type: mimeType || 'image/jpeg', data: image } } ] }],
     generationConfig: { response_mime_type: 'application/json', temperature: 0.1 }
@@ -70,13 +88,24 @@ export default async function handler(req, res) {
       parsed = m ? JSON.parse(m[0]) : { items: [] };
     }
     const items = (parsed.items || []).map(function(it) {
+      const orig = String(it.name || '').slice(0, 120).trim();
+      const pl = String(it.name_pl || '').slice(0, 120).trim();
       return {
-        name: String(it.name || '').slice(0, 120),
+        name: orig,
+        name_pl: pl || orig,
         qty: Math.max(1, Math.round(Number(it.qty) || 1)),
         unit_price: Math.max(0, Number(it.unit_price) || 0)
       };
     }).filter(function(it) { return it.name; });
-    return res.status(200).json({ items: items });
+    const CATS = ['jedzenie', 'transport', 'nocleg', 'rozrywka', 'zakupy', 'inne'];
+    const cat = String(parsed.category || '').toLowerCase().trim();
+    const code = String(parsed.currency || '').toUpperCase().trim();
+    return res.status(200).json({
+      items: items,
+      merchant: String(parsed.merchant || '').slice(0, 60).trim(),
+      category: CATS.indexOf(cat) !== -1 ? cat : null,
+      currency: /^[A-Z]{3}$/.test(code) ? code : null
+    });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Blad serwera', detail: String(e).slice(0, 300) });

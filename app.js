@@ -11,6 +11,7 @@ let items = [];
 let assignments = []; // {item_id, person_id, shares}
 let payments = []; // {session_id, person_id, amount}
 let renderPending = false;
+let lastPhoto = null; // {base64, stored} - ostatnie zdjecie do ponownej analizy bez wybierania pliku
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => (Math.round(n * 100) / 100).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -179,10 +180,29 @@ async function loadAll() {
 function cur() { return (session && session.currency) || 'PLN'; }
 function effectiveRate() {
   if (cur() === 'PLN') return 1;
-  const totalItems = items.reduce((s, it) => s + it.qty * it.unit_price, 0);
+  // "zaplacono lacznie w PLN" dotyczy calego rachunku, wiec napiwek tez wchodzi do mianownika
+  const billTotal = items.reduce((s, it) => s + it.qty * it.unit_price, 0) + (Number(session.tip) || 0);
   const pb = Number(session.paid_base) || 0;
-  if (pb > 0 && totalItems > 0) return pb / totalItems;
+  if (pb > 0 && billTotal > 0) return pb / billTotal;
   return Number(session.fx_rate) || null;
+}
+
+// osoby, ktore wylozyly pieniadze na napiwek (moze byc kilka - dzielone rowno)
+function tipPayerIds() {
+  const raw = session && session.tip_payers;
+  const arr = Array.isArray(raw) ? raw : [];
+  return arr.filter(id => people.some(p => p.id === id));
+}
+
+// ile kazda osoba faktycznie wylozyla: wplaty + jej czesc napiwku
+function paidByPerson() {
+  const paid = {};
+  for (const p of people) paid[p.id] = 0;
+  for (const pay of payments) if (paid[pay.person_id] !== undefined) paid[pay.person_id] += Number(pay.amount) || 0;
+  const tp = tipPayerIds();
+  const tip = Number(session.tip) || 0;
+  if (tp.length && tip > 0) for (const id of tp) paid[id] += tip / tp.length;
+  return paid;
 }
 const fmtC = (n) => fmt(n) + ' ' + (cur() === 'PLN' ? 'zł' : cur());
 
@@ -212,9 +232,13 @@ function ensureCurrencyOption(sel, code) {
 
 function subscribeRealtime() {
   const reload = debounce(loadAll, 300);
+  // w sesji grupowej osoby wisza pod group_id, nie pod session_id
+  const peopleFilter = session && session.group_id
+    ? `group_id=eq.${session.group_id}`
+    : `session_id=eq.${sessionId}`;
   db.channel('session-' + sessionId)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'items', filter: `session_id=eq.${sessionId}` }, reload)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'people', filter: `session_id=eq.${sessionId}` }, reload)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'people', filter: peopleFilter }, reload)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'assignments', filter: `session_id=eq.${sessionId}` }, reload)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'sessions', filter: `id=eq.${sessionId}` }, reload)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'payments', filter: `session_id=eq.${sessionId}` }, reload)
@@ -234,6 +258,8 @@ function bindUI() {
   $('btn-add-item').onclick = addItemManual;
   $('btn-all-assign').onclick = assignEveryoneToEverything;
   $('file-input').addEventListener('change', onPhoto);
+  const retryBtn = $('btn-retry-ai');
+  if (retryBtn) retryBtn.onclick = analyzePhoto;
   $('category').addEventListener('change', async (e) => {
     await db.from('sessions').update({ category: e.target.value }).eq('id', sessionId);
   });
@@ -333,12 +359,15 @@ function buildSummaryText() {
     lines.push('');
   }
   lines.push(`${t('Razem')}: ${fmtC(tot.grand)}${cur() !== 'PLN' && rate ? ` ≈ ${fmt(tot.grand * rate)} zł (${rate.toFixed(4)})` : ''}`);
-  if (tot.unassignedSum > 0.005) lines.push(`⚠️ ${t('Nieprzypisane pozycje')}: ${fmt(tot.unassignedSum)} zł`);
+  const tpIds = tipPayerIds();
+  if (tpIds.length && tot.tip > 0) {
+    const names = tpIds.map(id => (people.find(p => p.id === id) || {}).name).filter(Boolean).join(', ');
+    lines.push(`${t('Napiwek wyłożyli')}: ${names} (${fmtC(tot.tip)})`);
+  }
+  if (tot.unassignedSum > 0.005) lines.push(`⚠️ ${t('Nieprzypisane pozycje')}: ${fmtC(tot.unassignedSum)}`);
 
-  if (payments.length) {
-    const paid = {};
-    for (const p of people) paid[p.id] = 0;
-    for (const pay of payments) if (paid[pay.person_id] !== undefined) paid[pay.person_id] += Number(pay.amount) || 0;
+  if (payments.length || tipPayerIds().length) {
+    const paid = paidByPerson();
     const nets = people.map(p => ({ name: p.name, net: Math.round((paid[p.id] - tot.owed[p.id]) * 100) / 100 }));
     const debtors = nets.filter(x => x.net < -0.005).map(x => ({ ...x, net: -x.net })).sort((a, b) => b.net - a.net);
     const creditors = nets.filter(x => x.net > 0.005).sort((a, b) => b.net - a.net);
@@ -347,7 +376,7 @@ function buildSummaryText() {
       let di = 0, ci = 0;
       while (di < debtors.length && ci < creditors.length) {
         const amount = Math.min(debtors[di].net, creditors[ci].net);
-        if (amount > 0.005) lines.push(`  ${debtors[di].name} → ${creditors[ci].name}: ${fmt(amount)} zł`);
+        if (amount > 0.005) lines.push(`  ${debtors[di].name} → ${creditors[ci].name}: ${fmtC(amount)}`);
         debtors[di].net -= amount;
         creditors[ci].net -= amount;
         if (debtors[di].net <= 0.005) di++;
@@ -393,7 +422,12 @@ async function addPerson() {
 }
 
 async function removePerson(id) {
-  if (!confirm('Usunąć osobę i jej przypisania?')) return;
+  const p = people.find(x => x.id === id);
+  const who = p ? ` „${p.name}"` : '';
+  const msg = session && session.group_id
+    ? `Usunąć osobę${who} z CAŁEJ grupy? Zniknie ze wszystkich paragonów wyjazdu razem z przypisaniami.`
+    : `Usunąć osobę${who} i jej przypisania?`;
+  if (!confirm(msg)) return;
   await db.from('people').delete().eq('id', id);
   loadAll();
 }
@@ -476,7 +510,9 @@ async function togglePayer(personId) {
   } else {
     const t = computeTotals();
     const paidSoFar = payments.reduce((s, x) => s + (Number(x.amount) || 0), 0);
-    const remaining = Math.max(0, Math.round((t.grand - paidSoFar) * 100) / 100);
+    // napiwek wylozony osobno nie wchodzi do kwoty podpowiadanej platnikowi rachunku
+    const tipCovered = tipPayerIds().length ? t.tip : 0;
+    const remaining = Math.max(0, Math.round((t.billTotal - tipCovered - paidSoFar) * 100) / 100);
     await db.from('payments').insert({ session_id: sessionId, person_id: personId, amount: remaining });
   }
   loadAll();
@@ -507,26 +543,47 @@ function setupAiKey() {
 }
 
 // ---------- zdjęcie -> Gemini ----------
+function showRetry(on) {
+  const b = $('btn-retry-ai');
+  if (b) b.classList.toggle('hidden', !on);
+}
+
 async function onPhoto(e) {
   const file = e.target.files[0];
   if (!file) return;
   e.target.value = '';
-  const status = $('upload-status');
-  status.innerHTML = '<span class="spinner">🤖 Analizuję paragon…</span>';
-
   try {
     const { base64, blob } = await downscale(file);
+    lastPhoto = { base64, blob, stored: false };
+  } catch {
+    $('upload-status').textContent = '❌ Nie udało się odczytać zdjęcia.';
+    return;
+  }
+  analyzePhoto();
+}
 
-    // zapisz zdjecie paragonu do podgladu (nie blokuje analizy przy bledzie)
-    try {
-      const path = sessionId + '/' + Date.now() + '.jpg';
-      const up = await db.storage.from('receipts').upload(path, blob, { contentType: 'image/jpeg' });
-      if (!up.error) {
-        const url = SUPABASE_URL + '/storage/v1/object/public/receipts/' + path;
-        const urls = Array.isArray(session.receipt_urls) ? session.receipt_urls : [];
-        await db.from('sessions').update({ receipt_urls: [...urls, url] }).eq('id', sessionId);
-      }
-    } catch (e2) { console.warn('Nie udalo sie zapisac podgladu paragonu', e2); }
+// analiza ostatniego zdjecia - wolana tez przez "Sprobuj ponownie", bez wybierania pliku od nowa
+async function analyzePhoto() {
+  if (!lastPhoto) return;
+  const status = $('upload-status');
+  showRetry(false);
+  status.innerHTML = '<span class="spinner">🤖 Analizuję paragon…</span>';
+  const hadItems = items.length;
+
+  try {
+    // podglad zapisujemy tylko raz - ponowna proba nie dubluje miniatur
+    if (!lastPhoto.stored) {
+      try {
+        const path = sessionId + '/' + Date.now() + '.jpg';
+        const up = await db.storage.from('receipts').upload(path, lastPhoto.blob, { contentType: 'image/jpeg' });
+        if (!up.error) {
+          const url = SUPABASE_URL + '/storage/v1/object/public/receipts/' + path;
+          const urls = Array.isArray(session.receipt_urls) ? session.receipt_urls : [];
+          await db.from('sessions').update({ receipt_urls: [...urls, url] }).eq('id', sessionId);
+          lastPhoto.stored = true;
+        }
+      } catch (e2) { console.warn('Nie udalo sie zapisac podgladu paragonu', e2); }
+    }
 
     // autoryzacja AI: zalogowany user (whitelist) albo wlasny klucz z tego urzadzenia
     const headers = { 'Content-Type': 'application/json' };
@@ -539,28 +596,81 @@ async function onPhoto(e) {
     const r = await fetch('/api/parse-receipt', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ image: base64, mimeType: 'image/jpeg', userKey }),
+      body: JSON.stringify({ image: lastPhoto.base64, mimeType: 'image/jpeg', userKey }),
     });
-    const data = await r.json();
+    const data = await r.json().catch(() => ({}));
     if (r.status === 403 && data.needKey) {
       status.innerHTML = '🔑 Analiza AI wymaga własnego (darmowego) klucza Gemini. Pozycje możesz też dodać ręcznie.';
+      showRetry(true);
       setupAiKey();
       return;
     }
-    if (!r.ok) throw new Error(data.error || 'Błąd API');
-    if (!data.items.length) { status.textContent = 'Nie rozpoznano pozycji — spróbuj wyraźniejszego zdjęcia.'; return; }
+    if (!r.ok) throw new Error(data.error || ('Błąd API (' + r.status + ')'));
 
-    const rows = data.items.map((it, idx) => ({
-      session_id: sessionId, name: it.name, qty: it.qty, unit_price: it.unit_price,
-      position: items.length + idx,
-    }));
-    const { error } = await db.from('items').insert(rows);
+    const parsed = Array.isArray(data.items) ? data.items : [];
+    if (!parsed.length) {
+      status.textContent = 'Nie rozpoznano pozycji — spróbuj ponownie lub zrób wyraźniejsze zdjęcie.';
+      showRetry(true);
+      return;
+    }
+
+    const rows = parsed.map((it, idx) => {
+      const orig = String(it.name || '').trim();
+      const shown = String(it.name_pl || '').trim() || orig;
+      return {
+        session_id: sessionId,
+        name: shown,
+        orig_name: orig && orig !== shown ? orig : null,
+        qty: it.qty,
+        unit_price: it.unit_price,
+        position: hadItems + idx,
+      };
+    });
+    let { error } = await db.from('items').insert(rows);
+    if (error && /orig_name/i.test(error.message || '')) {
+      // baza bez migracji - zapisz same nazwy, zeby analiza nie przepadla
+      const plain = rows.map(({ orig_name, ...rest }) => rest);
+      ({ error } = await db.from('items').insert(plain));
+      if (!error) toast('Zapisano bez oryginalnych nazw — uruchom migration-2026-08.sql', 6000);
+    }
     if (error) throw new Error(error.message);
-    status.textContent = `✅ Rozpoznano ${data.items.length} pozycji — sprawdź i popraw w razie potrzeby.`;
+
+    const extra = await applyReceiptMeta(data, hadItems);
+    status.textContent = `✅ Rozpoznano ${parsed.length} pozycji — sprawdź i popraw w razie potrzeby.` + extra;
     loadAll();
   } catch (err) {
     status.textContent = '❌ ' + err.message;
+    showRetry(true);
   }
+}
+
+// nazwa lokalu, kategoria i waluta wykryte przez AI - ustawiane tylko gdy uzytkownik sam nic nie wybral
+async function applyReceiptMeta(data, hadItems) {
+  const patch = {};
+  const notes = [];
+
+  const isDefaultName = !session.name || /^Rachunek(\s+\d+)?$/i.test(String(session.name).trim());
+  if (data.merchant && isDefaultName) {
+    patch.name = data.merchant;
+    notes.push('nazwa: ' + data.merchant);
+  }
+  if (data.category && (!session.category || session.category === 'inne')) {
+    patch.category = data.category;
+    notes.push('kategoria: ' + data.category);
+  }
+  // waluta tylko na pustym rachunku, zeby nie przestawic juz policzonych pozycji
+  if (data.currency && data.currency !== cur() && cur() === 'PLN' && !hadItems) {
+    patch.currency = data.currency;
+    const mid = await fetchNbpRate(data.currency);
+    if (mid) patch.fx_rate = mid;
+    notes.push('waluta: ' + data.currency + (mid ? ` (kurs NBP ${mid})` : ' — podaj kurs ręcznie'));
+  }
+
+  if (!Object.keys(patch).length) return '';
+  const { error } = await db.from('sessions').update(patch).eq('id', sessionId);
+  if (error) return '';
+  Object.assign(session, patch);
+  return ' Ustawiono automatycznie — ' + notes.join(', ') + '.';
 }
 
 function downscale(file) {
@@ -629,10 +739,16 @@ function renderPeople() {
   box.innerHTML = '';
   if (!people.length) box.innerHTML = '<span class="muted small">' + t('Dodaj osoby, które się składają') + '</span>';
   for (const p of people) {
-    const chip = document.createElement('button');
+    // usuwa tylko ✕ - klikniecie w imie nie kasuje osoby przez przypadek
+    const chip = document.createElement('span');
     chip.className = 'chip';
-    chip.innerHTML = escapeHtml(p.name) + '<span class="x">✕</span>';
-    chip.onclick = () => removePerson(p.id);
+    chip.textContent = p.name;
+    const x = document.createElement('button');
+    x.className = 'x';
+    x.textContent = '✕';
+    x.title = t('Usuń osobę');
+    x.onclick = () => removePerson(p.id);
+    chip.appendChild(x);
     box.appendChild(chip);
   }
 }
@@ -646,7 +762,6 @@ function renderItems() {
   }
   for (const item of items) {
     const itemAssignments = assignments.filter(a => a.item_id === item.id);
-    const assigned = itemAssignments.map(a => a.person_id);
     const totalSh = itemAssignments.reduce((s, a) => s + (a.shares || 1), 0);
     const q = Math.max(1, Math.round(item.qty));
     // zielony dopiero gdy udzialy pokrywaja liczbe sztuk (przy 1 szt. wystarczy ktokolwiek)
@@ -721,7 +836,22 @@ function renderItems() {
       actions.appendChild(split);
     }
 
-    div.append(top, mid, actions);
+    div.append(top, mid);
+
+    // oryginalna nazwa z paragonu - dotkniecie wstawia ja do pola nazwy
+    if (item.orig_name && item.orig_name !== item.name) {
+      const orig = document.createElement('button');
+      orig.className = 'orig-name';
+      orig.textContent = '🧾 ' + item.orig_name;
+      orig.title = t('Nazwa z paragonu — dotknij, aby jej użyć');
+      orig.onclick = () => {
+        iName.value = item.orig_name;
+        saveItem(item.id, { name: item.orig_name });
+      };
+      div.append(orig);
+    }
+
+    div.append(actions);
     box.appendChild(div);
   }
 }
@@ -738,6 +868,36 @@ function renderTip() {
   if (document.activeElement !== $('tip-input')) $('tip-input').value = session.tip || '';
   $('tip-prop').classList.toggle('active', session.tip_mode === 'proportional');
   $('tip-equal').classList.toggle('active', session.tip_mode === 'equal');
+  const cn = $('tip-cur');
+  if (cn) cn.textContent = cur() === 'PLN' ? 'zł' : cur();
+
+  const box = $('tip-payers');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!people.length) {
+    box.innerHTML = '<span class="muted small">' + t('Najpierw dodaj osoby') + '</span>';
+    return;
+  }
+  const tp = tipPayerIds();
+  for (const p of people) {
+    const on = tp.indexOf(p.id) !== -1;
+    const chip = document.createElement('button');
+    chip.className = 'chip assignable' + (on ? ' on' : '');
+    const share = on && tp.length > 1 ? ' ' + fmtC((Number(session.tip) || 0) / tp.length) : '';
+    chip.textContent = p.name + share;
+    chip.onclick = () => toggleTipPayer(p.id);
+    box.appendChild(chip);
+  }
+}
+
+async function toggleTipPayer(personId) {
+  const tp = tipPayerIds();
+  const i = tp.indexOf(personId);
+  if (i === -1) tp.push(personId); else tp.splice(i, 1);
+  session.tip_payers = tp; // od razu, zeby UI nie mrugal przed odswiezeniem
+  const { error } = await db.from('sessions').update({ tip_payers: tp }).eq('id', sessionId);
+  if (error) toast('Nie zapisano — brakuje kolumny tip_payers? Uruchom migration-2026-08.sql', 6000);
+  loadAll();
 }
 
 // oblicza koszty pozycji + napiwek per osoba
@@ -758,21 +918,28 @@ function computeTotals() {
   const assignedTotal = itemsTotal - unassignedSum;
   const tip = Number(session.tip) || 0;
 
+  // napiwek dziela osoby, ktore cos jadly; jesli nikt nic nie ma - wszyscy po rowno
+  // (ta sama regula co w rozliczeniu grupy, inaczej salda sie rozjezdzaja)
+  const eaters = people.filter(p => shares[p.id] > 0.005);
+  const tipCrowd = eaters.length ? eaters : people;
+
   const owed = {}; // person_id -> laczna kwota do zaplaty (pozycje + napiwek)
   const tipShares = {};
   let grand = 0;
   for (const p of people) {
     let tipShare = 0;
-    if (tip > 0) {
+    if (tip > 0 && tipCrowd.some(x => x.id === p.id)) {
       tipShare = session.tip_mode === 'equal'
-        ? tip / people.length
-        : (assignedTotal > 0 ? (shares[p.id] / assignedTotal) * tip : tip / people.length);
+        ? tip / tipCrowd.length
+        : (assignedTotal > 0 ? (shares[p.id] / assignedTotal) * tip : tip / tipCrowd.length);
     }
     owed[p.id] = shares[p.id] + tipShare;
     tipShares[p.id] = tipShare;
     grand += owed[p.id];
   }
-  return { shares, tipShares, owed, grand, unassignedSum, tip };
+  // billTotal = wszystko, co realnie widnieje na rachunku (razem z pozycjami niczyimi)
+  const billTotal = itemsTotal + tip;
+  return { shares, tipShares, owed, grand, unassignedSum, tip, itemsTotal, billTotal };
 }
 
 function renderPayers() {
@@ -874,7 +1041,7 @@ function renderSummary() {
   if (t2.unassignedSum > 0.005) {
     const w = document.createElement('p');
     w.className = 'warn';
-    w.textContent = `⚠️ ${t('Nieprzypisane pozycje')}: ${fmt(t2.unassignedSum)} zł ${t('(nie wliczone do podziału)')}`;
+    w.textContent = `⚠️ ${t('Nieprzypisane pozycje')}: ${fmtC(t2.unassignedSum)} ${t('(nie wliczone do podziału)')}`;
     box.appendChild(w);
   }
 
@@ -884,11 +1051,9 @@ function renderSummary() {
 // kto komu ile oddaje (na podstawie wplat)
 function renderSettlement(tot) {
   const box = $('settlement');
-  if (!box || !payments.length) return;
+  if (!box || (!payments.length && !tipPayerIds().length)) return;
 
-  const paid = {};
-  for (const p of people) paid[p.id] = 0;
-  for (const pay of payments) if (paid[pay.person_id] !== undefined) paid[pay.person_id] += Number(pay.amount) || 0;
+  const paid = paidByPerson();
   const paidTotal = Object.values(paid).reduce((s, x) => s + x, 0);
 
   const h = document.createElement('h3');
@@ -896,10 +1061,10 @@ function renderSettlement(tot) {
   h.textContent = t('Rozliczenie');
   box.appendChild(h);
 
-  if (Math.abs(paidTotal - tot.grand) > 0.01) {
+  if (Math.abs(paidTotal - tot.billTotal) > 0.01) {
     const info = document.createElement('p');
     info.className = 'warn';
-    info.textContent = `⚠️ Wpłaty (${fmtC(paidTotal)}) różnią się od rachunku (${fmtC(tot.grand)}) — popraw kwoty.`;
+    info.textContent = `⚠️ Wpłaty (${fmtC(paidTotal)}) różnią się od rachunku (${fmtC(tot.billTotal)}) — popraw kwoty.`;
     box.appendChild(info);
   }
 

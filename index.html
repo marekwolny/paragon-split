@@ -67,6 +67,7 @@
       <input type="file" id="file-input" accept="image/*" hidden>
     </label>
     <div id="upload-status" class="muted"></div>
+    <button id="btn-retry-ai" class="btn-small hidden">🔄 Spróbuj ponownie</button>
     <div id="receipt-thumbs" class="thumbs"></div>
     <div class="row currency-row">
       <label class="small muted" for="currency">Waluta:</label>
@@ -74,6 +75,8 @@
         <option>PLN</option><option>EUR</option><option>USD</option><option>GBP</option>
         <option>CZK</option><option>HUF</option><option>CHF</option><option>NOK</option>
         <option>SEK</option><option>DKK</option><option>HRK</option><option>TRY</option>
+        <option>ALL</option><option>RSD</option><option>MKD</option><option>BGN</option>
+        <option>RON</option><option>UAH</option>
         <option value="__other">inna…</option>
       </select>
       <select id="category">
@@ -114,12 +117,14 @@
   <section class="card">
     <h2>4. Napiwek</h2>
     <div class="row">
-      <input type="number" id="tip-input" min="0" step="0.01" placeholder="0.00" inputmode="decimal"> <span>zł</span>
+      <input type="number" id="tip-input" min="0" step="0.01" placeholder="0.00" inputmode="decimal"> <span id="tip-cur">zł</span>
     </div>
     <div class="row tip-modes">
       <button id="tip-prop" class="btn-toggle">Proporcjonalnie</button>
       <button id="tip-equal" class="btn-toggle">Po równo</button>
     </div>
+    <p class="muted small">Kto wyłożył napiwek? <span class="muted">— można zaznaczyć kilka osób, kwota dzieli się między nie po równo</span></p>
+    <div id="tip-payers" class="chips"></div>
   </section>
 
   <section class="card">

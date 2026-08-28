@@ -158,7 +158,8 @@ function logActivity(text) {
 // ---------- szybki wydatek bez paragonu ----------
 async function addQuickExpense() {
   const name = $('qe-name').value.trim();
-  const amount = Number($('qe-amount').value) || 0;
+  // przecinek z klawiatury numerycznej tez ma dzialac
+  const amount = Number(String($('qe-amount').value).replace(/\s/g, '').replace(',', '.')) || 0;
   const currency = $('qe-currency').value;
   const category = $('qe-category').value;
   if (!name) return toast('Wpisz, czego dotyczy wydatek');
@@ -259,7 +260,8 @@ async function undoSettlement(id) {
 // kurs PLN danego paragonu
 function sessionRate(s, sessionItems) {
   if ((s.currency || 'PLN') === 'PLN') return 1;
-  const total = sessionItems.reduce((sum, it) => sum + it.qty * it.unit_price, 0);
+  // "zaplacono lacznie w PLN" obejmuje caly rachunek, wiec napiwek tez wchodzi do mianownika
+  const total = sessionItems.reduce((sum, it) => sum + it.qty * it.unit_price, 0) + (Number(s.tip) || 0);
   const pb = Number(s.paid_base) || 0;
   if (pb > 0 && total > 0) return pb / total;
   return Number(s.fx_rate) || null;
@@ -285,16 +287,24 @@ function sessionTotals(s) {
   const assignedTotal = itemsTotal - unassigned;
   const tip = Number(s.tip) || 0;
   if (tip > 0) {
-    const pids = Object.keys(owed);
+    // ta sama regula co na ekranie paragonu: napiwek dziela osoby, ktore cos jadly,
+    // a gdy nikt nie ma przypisanych pozycji - wszyscy uczestnicy grupy
+    const pids = Object.keys(owed).length ? Object.keys(owed) : people.map(p => p.id);
     for (const pid of pids) {
+      const base = owed[pid] || 0;
       const tipShare = s.tip_mode === 'equal'
         ? tip / pids.length
-        : (assignedTotal > 0 ? (owed[pid] / assignedTotal) * tip : tip / pids.length);
-      owed[pid] += tipShare;
+        : (assignedTotal > 0 ? (base / assignedTotal) * tip : tip / pids.length);
+      owed[pid] = base + tipShare;
     }
   }
   const paid = {};
   for (const pay of sPay) paid[pay.person_id] = (paid[pay.person_id] || 0) + (Number(pay.amount) || 0);
+  // kto wylozyl napiwek (moze byc kilka osob, dzielone po rowno)
+  const tipPayers = (Array.isArray(s.tip_payers) ? s.tip_payers : []).filter(id => people.some(p => p.id === id));
+  if (tipPayers.length && tip > 0) {
+    for (const id of tipPayers) paid[id] = (paid[id] || 0) + tip / tipPayers.length;
+  }
 
   return { owed, paid, unassigned, itemsTotal, tip, rate, currency: s.currency || 'PLN' };
 }
@@ -305,6 +315,7 @@ function groupTotals() {
   for (const p of people) { owedPln[p.id] = 0; paidPln[p.id] = 0; }
   const missingRate = [];
   let unassignedPln = 0;
+  let billPln = 0; // wszystko, co widnieje na paragonach (razem z pozycjami niczyimi)
 
   for (const s of sessions) {
     const t = sessionTotals(s);
@@ -312,6 +323,7 @@ function groupTotals() {
     for (const pid in t.owed) if (owedPln[pid] !== undefined) owedPln[pid] += t.owed[pid] * t.rate;
     for (const pid in t.paid) if (paidPln[pid] !== undefined) paidPln[pid] += t.paid[pid] * t.rate;
     unassignedPln += t.unassigned * t.rate;
+    billPln += (t.itemsTotal + t.tip) * t.rate;
   }
   // splaty: kto oddal, temu rosnie "zaplacone"; kto dostal, temu maleje
   for (const st of settlements) {
@@ -319,7 +331,7 @@ function groupTotals() {
     if (paidPln[st.from_person] !== undefined) paidPln[st.from_person] += amt;
     if (paidPln[st.to_person] !== undefined) paidPln[st.to_person] -= amt;
   }
-  return { owedPln, paidPln, unassignedPln, missingRate };
+  return { owedPln, paidPln, unassignedPln, missingRate, billPln };
 }
 
 // wydatki wg kategorii (PLN)
@@ -424,10 +436,16 @@ function render() {
   pl.innerHTML = '';
   if (!people.length) pl.innerHTML = '<span class="muted small">' + t('Dodaj uczestników wyjazdu — będą widoczni we wszystkich paragonach') + '</span>';
   for (const p of people) {
-    const chip = document.createElement('button');
+    // usuwa tylko ✕ - klikniecie w imie nie kasuje uczestnika przez przypadek
+    const chip = document.createElement('span');
     chip.className = 'chip';
-    chip.innerHTML = p.name.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) + '<span class="x">✕</span>';
-    chip.onclick = () => removePerson(p.id);
+    chip.textContent = p.name;
+    const x = document.createElement('button');
+    x.className = 'x';
+    x.textContent = '✕';
+    x.title = t('Usuń osobę');
+    x.onclick = () => removePerson(p.id);
+    chip.appendChild(x);
     pl.appendChild(chip);
   }
 
@@ -531,7 +549,9 @@ function renderGroupSummary() {
   }
   const totalRow = document.createElement('div');
   totalRow.className = 'summary-row total';
-  totalRow.innerHTML = `<span>${t('Razem wydatki')}</span><span>${fmt(grandOwed)} zł</span>`;
+  // suma z paragonow (ta sama, co w wykresie kategorii); pozycje niczyje sa w niej zawarte
+  const detail = g.unassignedPln > 0.005 ? `<span class="details">${t('rozdzielone')} ${fmt(grandOwed)} zł</span>` : '';
+  totalRow.innerHTML = `<span>${t('Razem wydatki')}</span><span class="amount-col"><span>${fmt(g.billPln)} zł</span>${detail}</span>`;
   box.appendChild(totalRow);
 
   if (g.unassignedPln > 0.005) {
@@ -546,10 +566,10 @@ function renderGroupSummary() {
     w.textContent = `⚠️ „${s.name || 'Rachunek'}" (${s.currency}) pominięty — brak kursu. Otwórz go i podaj kurs lub kwotę w PLN.`;
     box.appendChild(w);
   }
-  if (Math.abs(grandPaid - grandOwed) > 0.01 && grandPaid > 0) {
+  if (Math.abs(grandPaid - g.billPln) > 0.01 && grandPaid > 0) {
     const w = document.createElement('p');
     w.className = 'warn';
-    w.textContent = `⚠️ Suma wpłat (${fmt(grandPaid)} zł) ≠ suma wydatków (${fmt(grandOwed)} zł) — sprawdź "kto zapłacił" w paragonach.`;
+    w.textContent = `⚠️ Suma wpłat (${fmt(grandPaid)} zł) ≠ suma z paragonów (${fmt(g.billPln)} zł) — sprawdź "kto zapłacił" w paragonach.`;
     box.appendChild(w);
   }
 

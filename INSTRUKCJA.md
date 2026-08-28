@@ -75,3 +75,26 @@ Każdy `git push` automatycznie wdraża nową wersję.
 - Bezpieczeństwo sesji: link zawiera niezgadywalny UUID — kto ma link, ten ma dostęp. Nie wrzucaj linku publicznie.
 - Darmowe limity: Supabase (500 MB bazy), Vercel (100 GB transferu/mies.), Gemini (limit dzienny darmowego tier) — na prywatne użycie aż nadto.
 - Stare sesje możesz czyścić w Supabase: Table Editor → sessions → usuń wiersze (kasują się kaskadowo z pozycjami).
+
+## Aktualizacja z sierpnia 2026
+
+Przed wgraniem nowej wersji uruchom w Supabase (SQL Editor → New query → Run)
+zawartość pliku `migration-2026-08.sql`. Dodaje:
+
+- `items.orig_name` — nazwa pozycji dokładnie tak, jak jest na paragonie
+  (w `items.name` trzyma się nazwę wyświetlaną: tłumaczenie lub Twoją poprawkę),
+- `sessions.tip_payers` — kto wyłożył pieniądze na napiwek (może być kilka osób).
+
+Bez migracji aplikacja działa dalej, ale nie zapamięta oryginalnych nazw
+ani płatników napiwku.
+
+Co jeszcze się zmieniło:
+
+- analiza AI zwraca też nazwę lokalu, kategorię i walutę paragonu —
+  ustawiają się automatycznie, dopóki sam czegoś nie wybierzesz,
+- przycisk „🔄 Spróbuj ponownie" po nieudanej analizie (bez wybierania zdjęcia od nowa,
+  bez dublowania miniatury),
+- napiwek dzieli się tak samo na ekranie paragonu i w rozliczeniu wyjazdu,
+- „Zapłacono łącznie w PLN" wlicza napiwek do przeliczenia kursu,
+- waluta rachunku podpisuje wszystkie kwoty (wcześniej w kilku miejscach było na sztywno „zł"),
+- osobę usuwa się tylko przez ✕, a nie kliknięciem w imię.

@@ -69,6 +69,13 @@
     'Ta osoba już jest': 'This person already exists',
     '🧾 Rozliczenie rachunku': '🧾 Bill settlement',
     '— do zapłaty': '— owes',
+    '🔄 Spróbuj ponownie': '🔄 Try again',
+    'Kto wyłożył napiwek?': 'Who paid the tip?',
+    '— można zaznaczyć kilka osób, kwota dzieli się między nie po równo': '— you can pick several people, the amount is split equally between them',
+    'Napiwek wyłożyli': 'Tip paid by',
+    'Usuń osobę': 'Remove person',
+    'Nazwa z paragonu — dotknij, aby jej użyć': 'Name as printed on the receipt — tap to use it',
+    'rozdzielone': 'split up',
 
     // grupa
     'Nazwa wyjazdu': 'Trip name',
