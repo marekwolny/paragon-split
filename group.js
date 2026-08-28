@@ -1,8 +1,6 @@
-import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+import * as api from './data.js';
 
-const { SUPABASE_URL, SUPABASE_ANON_KEY } = window.APP_CONFIG;
-const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
+let chan = null; // kanal do rozglaszania zmian innym urzadzeniom
 let groupId = null;
 let group = null;
 let people = [];
@@ -80,7 +78,8 @@ async function init() {
     e.target.value = code;
   });
   $('group-name-input').addEventListener('input', debounce(async () => {
-    await db.from('groups').update({ name: $('group-name-input').value.trim() || 'Wyjazd' }).eq('id', groupId);
+    try { await api.renameGroup(groupId, $('group-name-input').value.trim() || 'Wyjazd'); api.announce(chan); }
+    catch (e) { toast('Błąd: ' + e.message); }
   }, 600));
 
   await loadAll();
@@ -88,35 +87,18 @@ async function init() {
 }
 
 async function loadAll() {
-  // rpc: dostep po dokladnym ID (link = dostep), bez mozliwosci listowania cudzych grup
-  const g = await db.rpc('get_group', { gid: groupId });
-  if (g.error || !g.data || !g.data.length) { toast('Nie znaleziono grupy'); return; }
-  group = g.data[0];
-
-  const [p, s, st, act] = await Promise.all([
-    db.from('people').select('*').eq('group_id', groupId).order('created_at'),
-    db.from('sessions').select('*').eq('group_id', groupId).order('created_at'),
-    db.from('settlements').select('*').eq('group_id', groupId).order('created_at'),
-    db.from('activity').select('*').eq('group_id', groupId).order('created_at', { ascending: false }).limit(30),
-  ]);
-  people = p.data || [];
-  sessions = s.data || [];
-  settlements = st.data || [];
-  activity = act.data || [];
-
-  const ids = sessions.map(x => x.id);
-  if (ids.length) {
-    const [i, a, pay] = await Promise.all([
-      db.from('items').select('*').in('session_id', ids),
-      db.from('assignments').select('*').in('session_id', ids),
-      db.from('payments').select('*').in('session_id', ids),
-    ]);
-    items = i.data || [];
-    assignments = a.data || [];
-    payments = pay.data || [];
-  } else {
-    items = []; assignments = []; payments = [];
-  }
+  // dostep po dokladnym ID (link = dostep), bez mozliwosci listowania cudzych grup
+  let b;
+  try { b = await api.loadGroupBundle(groupId); }
+  catch { toast('Nie znaleziono grupy'); return; }
+  group = b.group;
+  people = b.people;
+  sessions = b.sessions;
+  settlements = b.settlements;
+  activity = b.activity;
+  items = b.items;
+  assignments = b.assignments;
+  payments = b.payments;
 
   // zapamietaj odwiedzona grupe (lista na stronie glownej)
   try {
@@ -130,16 +112,22 @@ async function loadAll() {
 
 function subscribeRealtime() {
   const reload = debounce(loadAll, 400);
-  db.channel('group-' + groupId)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'groups', filter: `id=eq.${groupId}` }, reload)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'people', filter: `group_id=eq.${groupId}` }, reload)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'sessions', filter: `group_id=eq.${groupId}` }, reload)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, reload)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'assignments' }, reload)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, reload)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'settlements', filter: `group_id=eq.${groupId}` }, reload)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'activity', filter: `group_id=eq.${groupId}` }, reload)
-    .subscribe();
+  chan = api.subscribe('group-' + groupId, [
+    { table: 'groups', filter: `id=eq.${groupId}` },
+    { table: 'people', filter: `group_id=eq.${groupId}` },
+    { table: 'sessions', filter: `group_id=eq.${groupId}` },
+    { table: 'items', filter: undefined },
+    { table: 'assignments', filter: undefined },
+    { table: 'payments', filter: undefined },
+    { table: 'settlements', filter: `group_id=eq.${groupId}` },
+    { table: 'activity', filter: `group_id=eq.${groupId}` },
+  ], reload);
+}
+
+// zapis poszedl: powiadom innych i przeladuj u siebie
+function synced() {
+  api.announce(chan);
+  loadAll();
 }
 
 // imie "mnie" do logu aktywnosci
@@ -152,7 +140,7 @@ function meName() {
 // log aktywnosci (fire & forget)
 function logActivity(text) {
   const who = meName();
-  db.from('activity').insert({ group_id: groupId, text: (who ? who + ': ' : '') + text }).then(() => {});
+  api.logActivity(groupId, (who ? who + ': ' : '') + text);
 }
 
 // ---------- szybki wydatek bez paragonu ----------
@@ -182,22 +170,18 @@ async function addQuickExpense() {
     }
   }
 
-  const { data: ses, error } = await db.from('sessions')
-    .insert({ group_id: groupId, name, currency, fx_rate, category }).select().single();
-  if (error) return toast('Błąd: ' + error.message);
-
-  const { data: item, error: e2 } = await db.from('items')
-    .insert({ session_id: ses.id, name, qty: 1, unit_price: amount }).select().single();
-  if (e2) return toast('Błąd: ' + e2.message);
-
-  await db.from('assignments').insert(people.map(p => ({ item_id: item.id, person_id: p.id, session_id: ses.id, shares: 1 })));
-  await db.from('payments').insert({ session_id: ses.id, person_id: qePayerId, amount });
-
-  logActivity(`dodał(a) wydatek "${name}" ${amount} ${currency}`);
-  $('qe-name').value = ''; $('qe-amount').value = '';
-  qePayerId = null;
-  toast('Wydatek dodany ⚡');
-  loadAll();
+  try {
+    const ses = await api.createSession({ groupId, name });
+    await api.updateSession(ses.id, { currency, fx_rate, category });
+    await api.addItems(ses.id, [{ name, qty: 1, unit_price: amount, position: 0 }]);
+    await api.assignEveryone(ses.id);
+    await api.setPayment(ses.id, qePayerId, amount);
+    logActivity(`dodał(a) wydatek "${name}" ${amount} ${currency}`);
+    $('qe-name').value = ''; $('qe-amount').value = '';
+    qePayerId = null;
+    toast('Wydatek dodany ⚡');
+    synced();
+  } catch (e) { toast('Błąd: ' + e.message); }
 }
 
 async function share() {
@@ -214,47 +198,53 @@ async function addPerson() {
   if (!name) return;
   if (people.some(p => p.name.toLowerCase() === name.toLowerCase())) return toast('Ta osoba już jest');
   $('person-name').value = '';
-  const { error } = await db.from('people').insert({ group_id: groupId, name });
-  if (error) toast('Błąd: ' + error.message); else loadAll();
+  try { await api.addPerson({ groupId, name }); synced(); }
+  catch (e) { toast('Błąd: ' + e.message); }
 }
 
 async function removePerson(id) {
   if (!confirm('Usunąć osobę? Zniknie ze WSZYSTKICH paragonów tej grupy razem z przypisaniami.')) return;
   const p = people.find(x => x.id === id);
-  await db.from('people').delete().eq('id', id);
-  logActivity('usunął(ęła) osobę ' + (p ? p.name : ''));
-  loadAll();
+  try {
+    await api.deletePerson(id);
+    logActivity('usunął(ęła) osobę ' + (p ? p.name : ''));
+    synced();
+  } catch (e) { toast('Błąd: ' + e.message); }
 }
 
 async function addReceipt() {
-  const { data, error } = await db.from('sessions').insert({ group_id: groupId, name: 'Rachunek ' + (sessions.length + 1) }).select().single();
-  if (error) return toast('Błąd: ' + error.message);
-  logActivity('dodał(a) paragon "' + data.name + '"');
-  location.href = 'index.html?s=' + data.id;
+  try {
+    const s = await api.createSession({ groupId, name: 'Rachunek ' + (sessions.length + 1) });
+    logActivity('dodał(a) paragon "' + s.name + '"');
+    location.href = 'index.html?s=' + s.id;
+  } catch (e) { toast('Błąd: ' + e.message); }
 }
 
 async function removeReceipt(id) {
   if (!confirm('Usunąć ten paragon z całą zawartością?')) return;
   const s = sessions.find(x => x.id === id);
-  await db.from('sessions').delete().eq('id', id);
-  logActivity('usunął(ęła) paragon "' + (s ? s.name : '') + '"');
-  loadAll();
+  try {
+    await api.deleteSession(id);
+    logActivity('usunął(ęła) paragon "' + (s ? s.name : '') + '"');
+    synced();
+  } catch (e) { toast('Błąd: ' + e.message); }
 }
 
 // ---------- splaty ----------
 async function markSettled(fromId, toId, amount) {
   const from = people.find(p => p.id === fromId), to = people.find(p => p.id === toId);
   if (!confirm(`Potwierdzić: ${from.name} oddał(a) ${to.name} ${fmt(amount)} zł?`)) return;
-  const { error } = await db.from('settlements').insert({ group_id: groupId, from_person: fromId, to_person: toId, amount: Math.round(amount * 100) / 100 });
-  if (error) return toast('Błąd: ' + error.message);
-  logActivity(`oznaczył(a) spłatę: ${from.name} → ${to.name} ${fmt(amount)} zł ✓`);
-  loadAll();
+  try {
+    await api.addSettlement(groupId, fromId, toId, Math.round(amount * 100) / 100);
+    logActivity(`oznaczył(a) spłatę: ${from.name} → ${to.name} ${fmt(amount)} zł ✓`);
+    synced();
+  } catch (e) { toast('Błąd: ' + e.message); }
 }
 
 async function undoSettlement(id) {
   if (!confirm('Cofnąć tę spłatę?')) return;
-  await db.from('settlements').delete().eq('id', id);
-  loadAll();
+  try { await api.deleteSettlement(id); synced(); }
+  catch (e) { toast('Błąd: ' + e.message); }
 }
 
 // kurs PLN danego paragonu
@@ -364,14 +354,14 @@ function renderMe() {
     $('me-rename').onclick = async () => {
       const n = prompt('Twoje imię widoczne w grupie:', me.name);
       if (!n || !n.trim()) return;
-      await db.from('people').update({ name: n.trim() }).eq('id', me.id);
-      loadAll();
+      try { await api.updatePerson(me.id, { name: n.trim() }); synced(); }
+      catch (e) { toast('Błąd: ' + e.message); }
     };
     $('me-phone').onclick = async () => {
       const n = prompt('Twój numer telefonu (BLIK) — pokaże się osobom, które mają Ci oddać pieniądze.\nPozostaw puste, aby usunąć.', me.phone || '');
       if (n === null) return;
-      await db.from('people').update({ phone: n.trim() || null }).eq('id', me.id);
-      loadAll();
+      try { await api.updatePerson(me.id, { phone: n.trim() || null }); synced(); }
+      catch (e) { toast('Błąd: ' + e.message); }
     };
     $('me-clear').onclick = () => { localStorage.removeItem('me-' + groupId); render(); };
     return;
@@ -410,12 +400,13 @@ function renderMe() {
     const name = inp.value.trim();
     if (!name) return;
     if (people.some(p => p.name.toLowerCase() === name.toLowerCase())) return toast('To imię już jest — dotknij go na liście');
-    const { data, error } = await db.from('people').insert({ group_id: groupId, name }).select().single();
-    if (error) return toast('Błąd: ' + error.message);
-    localStorage.setItem('me-' + groupId, data.id);
-    db.from('activity').insert({ group_id: groupId, text: name + ' dołączył(a) do grupy 👋' }).then(() => {});
+    let person;
+    try { person = await api.addPerson({ groupId, name }); }
+    catch (e) { return toast('Błąd: ' + e.message); }
+    localStorage.setItem('me-' + groupId, person.id);
+    api.logActivity(groupId, name + ' dołączył(a) do grupy 👋');
     toast('Witaj w grupie, ' + name + '! 🎉');
-    loadAll();
+    synced();
   };
   btn.onclick = join;
   inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') join(); });

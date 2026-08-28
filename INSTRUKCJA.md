@@ -98,3 +98,28 @@ Co jeszcze się zmieniło:
 - „Zapłacono łącznie w PLN" wlicza napiwek do przeliczenia kursu,
 - waluta rachunku podpisuje wszystkie kwoty (wcześniej w kilku miejscach było na sztywno „zł"),
 - osobę usuwa się tylko przez ✕, a nie kliknięciem w imię.
+
+## Zabezpieczenie dostępu (sierpień 2026)
+
+Do tej pory polityki RLS `using (true)` pozwalały każdemu z publicznym kluczem anon
+(jest w `config.js`) pobrać zawartość tabel `sessions`, `items`, `people`, `payments`,
+`settlements` i `activity` — wszystkie wyjazdy w bazie, nie tylko własne, razem z imionami,
+kwotami i numerami telefonów. Można też było wysłać `UPDATE` albo `DELETE` bez filtra.
+
+Naprawa: cały odczyt i zapis idzie przez funkcje `SECURITY DEFINER` (tak jak istniejące
+`get_group`), a tabele mają wyłączony dostęp dla anona. Model „link = dostęp" zostaje bez
+zmian: kto zna UUID grupy albo paragonu, ten widzi i edytuje — kto nie zna, nie zobaczy nic.
+
+Kolejność wdrożenia (JavaScript ma ścieżkę awaryjną, więc kolejność jest bezpieczna
+w obie strony, ale tak jest najwygodniej):
+
+1. `git push` — nowy `data.js` plus przerobione `app.js`, `group.js`, `migrate.html`.
+2. Supabase → SQL Editor → uruchom `rls-hardening.sql` (zawiera też migrację kolumn).
+3. Sprawdź konsolą w przeglądarce, że tabele zwracają zero wierszy — gotowy fragment
+   jest w komentarzu na końcu tego skryptu.
+
+Skrypt można uruchamiać wielokrotnie. Na końcu ma zakomentowany blok wycofania.
+
+Efekt uboczny: Realtime przez `postgres_changes` respektuje RLS, więc po zamknięciu tabel
+przestałby cokolwiek dostarczać. Zamiast tego klienci rozgłaszają zmiany kanałem broadcast,
+a dane odświeżają się też przy powrocie do karty.

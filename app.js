@@ -1,9 +1,8 @@
-import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-
-const { SUPABASE_URL, SUPABASE_ANON_KEY } = window.APP_CONFIG;
-const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+import * as api from './data.js';
+import { db, SUPABASE_URL } from './data.js';
 
 // ---------- stan ----------
+let chan = null; // kanal do rozglaszania zmian innym urzadzeniom
 let sessionId = null;
 let session = null;
 let people = [];
@@ -77,10 +76,16 @@ async function init() {
 }
 
 async function createSession(groupId) {
-  const payload = groupId ? { group_id: groupId } : {};
-  const { data, error } = await db.from('sessions').insert(payload).select().single();
-  if (error) return toast('Błąd: ' + error.message);
-  location.search = '?s=' + data.id;
+  try {
+    const s = await api.createSession({ groupId: groupId || null });
+    location.search = '?s=' + s.id;
+  } catch (e) { toast('Błąd: ' + e.message); }
+}
+
+// zapis poszedl: powiadom innych i przeladuj u siebie
+function synced() {
+  api.announce(chan);
+  loadAll();
 }
 
 // ---------- landing: logowanie + grupy ----------
@@ -121,8 +126,7 @@ async function renderGroupsList() {
     return;
   }
 
-  const { data } = await db.from('groups').select('id,name').eq('owner', currentUser.id).order('created_at', { ascending: false });
-  const mine = data || [];
+  const mine = await api.myGroups(currentUser.id).catch(() => []);
   const seen = new Set(mine.map(g => g.id));
   const visited = visitedGroups().filter(g => !seen.has(g.id));
   const all = [...mine, ...visited.map(v => ({ ...v, visited: true }))];
@@ -142,31 +146,22 @@ async function renderGroupsList() {
 async function createGroup() {
   if (!currentUser) return toast('Zaloguj się, aby utworzyć grupę');
   const name = $('group-name').value.trim() || 'Wyjazd';
-  const { data, error } = await db.from('groups').insert({ name, owner: currentUser.id }).select().single();
-  if (error) return toast('Błąd: ' + error.message);
-  location.href = 'group.html?g=' + data.id;
+  try {
+    const g = await api.createGroup(name, currentUser.id);
+    location.href = 'group.html?g=' + g.id;
+  } catch (e) { toast('Błąd: ' + e.message); }
 }
 
 // ---------- dane ----------
 async function loadAll() {
-  const s = await db.from('sessions').select('*').eq('id', sessionId).single();
-  if (s.error) { toast('Nie znaleziono sesji'); return; }
-  session = s.data;
-
-  const peopleQuery = session.group_id
-    ? db.from('people').select('*').eq('group_id', session.group_id).order('created_at')
-    : db.from('people').select('*').eq('session_id', sessionId).order('created_at');
-
-  const [p, i, a, pay] = await Promise.all([
-    peopleQuery,
-    db.from('items').select('*').eq('session_id', sessionId).order('position').order('created_at'),
-    db.from('assignments').select('*').eq('session_id', sessionId),
-    db.from('payments').select('*').eq('session_id', sessionId),
-  ]);
-  people = p.data || [];
-  items = i.data || [];
-  assignments = a.data || [];
-  payments = pay.data || [];
+  let b;
+  try { b = await api.loadSessionBundle(sessionId); }
+  catch { toast('Nie znaleziono sesji'); return; }
+  session = b.session;
+  people = b.people;
+  items = b.items;
+  assignments = b.assignments;
+  payments = b.payments;
 
   const back = $('group-backlink');
   if (back && session.group_id) {
@@ -236,13 +231,13 @@ function subscribeRealtime() {
   const peopleFilter = session && session.group_id
     ? `group_id=eq.${session.group_id}`
     : `session_id=eq.${sessionId}`;
-  db.channel('session-' + sessionId)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'items', filter: `session_id=eq.${sessionId}` }, reload)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'people', filter: peopleFilter }, reload)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'assignments', filter: `session_id=eq.${sessionId}` }, reload)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'sessions', filter: `id=eq.${sessionId}` }, reload)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'payments', filter: `session_id=eq.${sessionId}` }, reload)
-    .subscribe();
+  chan = api.subscribe('session-' + sessionId, [
+    { table: 'items', filter: `session_id=eq.${sessionId}` },
+    { table: 'people', filter: peopleFilter },
+    { table: 'assignments', filter: `session_id=eq.${sessionId}` },
+    { table: 'sessions', filter: `id=eq.${sessionId}` },
+    { table: 'payments', filter: `session_id=eq.${sessionId}` },
+  ], reload);
 }
 
 function debounce(fn, ms) {
@@ -261,11 +256,13 @@ function bindUI() {
   const retryBtn = $('btn-retry-ai');
   if (retryBtn) retryBtn.onclick = analyzePhoto;
   $('category').addEventListener('change', async (e) => {
-    await db.from('sessions').update({ category: e.target.value }).eq('id', sessionId);
+    await api.updateSession(sessionId, { category: e.target.value }).catch(err => toast('Błąd: ' + err.message));
+    api.announce(chan);
   });
   $('tip-input').addEventListener('change', async (e) => {
     const tip = Math.max(0, parseFloat(String(e.target.value).replace(',', '.')) || 0);
-    await db.from('sessions').update({ tip }).eq('id', sessionId);
+    await api.updateSession(sessionId, { tip }).catch(err => toast('Błąd: ' + err.message));
+    synced();
   });
   $('tip-prop').onclick = () => setTipMode('proportional');
   $('tip-equal').onclick = () => setTipMode('equal');
@@ -297,18 +294,18 @@ function bindUI() {
       patch.fx_rate = null;
       patch.paid_base = null;
     }
-    await db.from('sessions').update(patch).eq('id', sessionId);
-    loadAll();
+    await api.updateSession(sessionId, patch).catch(err => toast('Błąd: ' + err.message));
+    synced();
   });
   $('fx-rate').addEventListener('change', async (e) => {
     const v = Number(e.target.value) || null;
-    await db.from('sessions').update({ fx_rate: v }).eq('id', sessionId);
-    loadAll();
+    await api.updateSession(sessionId, { fx_rate: v }).catch(err => toast('Błąd: ' + err.message));
+    synced();
   });
   $('paid-base').addEventListener('change', async (e) => {
     const v = Number(e.target.value) || null;
-    await db.from('sessions').update({ paid_base: v }).eq('id', sessionId);
-    loadAll();
+    await api.updateSession(sessionId, { paid_base: v }).catch(err => toast('Błąd: ' + err.message));
+    synced();
   });
 }
 
@@ -398,7 +395,8 @@ async function copySummary() {
 }
 
 async function setTipMode(mode) {
-  await db.from('sessions').update({ tip_mode: mode }).eq('id', sessionId);
+  await api.updateSession(sessionId, { tip_mode: mode }).catch(e => toast('Błąd: ' + e.message));
+  synced();
 }
 
 async function share() {
@@ -416,9 +414,12 @@ async function addPerson() {
   if (!name) return;
   if (people.some(p => p.name.toLowerCase() === name.toLowerCase())) return toast('Ta osoba już jest');
   $('person-name').value = '';
-  const payload = session && session.group_id ? { group_id: session.group_id, name } : { session_id: sessionId, name };
-  const { error } = await db.from('people').insert(payload);
-  if (error) toast('Błąd: ' + error.message); else loadAll();
+  try {
+    await api.addPerson(session && session.group_id
+      ? { groupId: session.group_id, name }
+      : { sessionId, name });
+    synced();
+  } catch (e) { toast('Błąd: ' + e.message); }
 }
 
 async function removePerson(id) {
@@ -428,26 +429,26 @@ async function removePerson(id) {
     ? `Usunąć osobę${who} z CAŁEJ grupy? Zniknie ze wszystkich paragonów wyjazdu razem z przypisaniami.`
     : `Usunąć osobę${who} i jej przypisania?`;
   if (!confirm(msg)) return;
-  await db.from('people').delete().eq('id', id);
-  loadAll();
+  try { await api.deletePerson(id); synced(); }
+  catch (e) { toast('Błąd: ' + e.message); }
 }
 
 // ---------- pozycje ----------
 async function addItemManual() {
-  const { error } = await db.from('items').insert({
-    session_id: sessionId, name: 'Nowa pozycja', qty: 1, unit_price: 0,
-    position: items.length,
-  });
-  if (error) toast('Błąd: ' + error.message); else loadAll();
+  try {
+    await api.addItems(sessionId, [{ name: t('Nowa pozycja'), qty: 1, unit_price: 0, position: items.length }]);
+    synced();
+  } catch (e) { toast('Błąd: ' + e.message); }
 }
 
 async function removeItem(id) {
-  await db.from('items').delete().eq('id', id);
-  loadAll();
+  try { await api.deleteItem(id); synced(); }
+  catch (e) { toast('Błąd: ' + e.message); }
 }
 
 const saveItem = debounce(async (id, patch) => {
-  await db.from('items').update(patch).eq('id', id);
+  try { await api.updateItem(id, patch); api.announce(chan); }
+  catch (e) { toast('Błąd: ' + e.message); }
 }, 500);
 
 // "4x Piwo" -> 4 osobne pozycje po 1 szt.
@@ -456,41 +457,30 @@ async function splitItem(item) {
   if (qty < 2) return;
   const rows = [];
   for (let k = 0; k < qty - 1; k++) {
-    rows.push({ session_id: sessionId, name: item.name, qty: 1, unit_price: item.unit_price, position: item.position });
+    rows.push({ name: item.name, orig_name: item.orig_name, qty: 1, unit_price: item.unit_price, position: item.position });
   }
-  const { error } = await db.from('items').insert(rows);
-  if (error) return toast('Błąd: ' + error.message);
-  await db.from('items').update({ qty: 1 }).eq('id', item.id);
-  loadAll();
+  try {
+    await api.addItems(sessionId, rows);
+    await api.updateItem(item.id, { qty: 1 });
+    synced();
+  } catch (e) { toast('Błąd: ' + e.message); }
 }
 
 async function toggleAssign(itemId, personId) {
   const exists = assignments.some(a => a.item_id === itemId && a.person_id === personId);
-  if (exists) {
-    await db.from('assignments').delete().eq('item_id', itemId).eq('person_id', personId);
-  } else {
-    await db.from('assignments').insert({ item_id: itemId, person_id: personId, session_id: sessionId, shares: 1 });
-  }
-  loadAll();
+  try { await api.setAssignment(sessionId, itemId, personId, exists ? 0 : 1); synced(); }
+  catch (e) { toast('Błąd: ' + e.message); }
 }
 
 // jednym tapnieciem: kazda pozycja podzielona rowno na wszystkich
 async function assignEveryoneToEverything() {
   if (!people.length || !items.length) return toast('Brak osób lub pozycji');
   if (!confirm('Przypisać WSZYSTKIE osoby do WSZYSTKICH pozycji (po równo)? Istniejące przypisania zostaną zachowane.')) return;
-  const rows = [];
-  for (const item of items) {
-    for (const p of people) {
-      if (!assignments.some(a => a.item_id === item.id && a.person_id === p.id)) {
-        rows.push({ item_id: item.id, person_id: p.id, session_id: sessionId, shares: 1 });
-      }
-    }
-  }
-  if (!rows.length) return toast('Wszystko już przypisane');
-  const { error } = await db.from('assignments').insert(rows);
-  if (error) return toast('Błąd: ' + error.message);
-  toast(`Przypisano ${rows.length} pozycji 👥`);
-  loadAll();
+  try {
+    const n = await api.assignEveryone(sessionId);
+    toast(n ? `Przypisano ${n} pozycji 👥` : 'Wszystko już przypisane');
+    synced();
+  } catch (e) { toast('Błąd: ' + e.message); }
 }
 
 // zwieksz udzial osoby w pozycji (np. para je za dwoje): 1 -> 2 -> 3 ... max 9
@@ -498,29 +488,28 @@ async function bumpShares(itemId, personId) {
   const a = assignments.find(x => x.item_id === itemId && x.person_id === personId);
   if (!a) return;
   const next = Math.min(9, (a.shares || 1) + 1);
-  await db.from('assignments').update({ shares: next }).eq('item_id', itemId).eq('person_id', personId);
-  loadAll();
+  try { await api.setAssignment(sessionId, itemId, personId, next); synced(); }
+  catch (e) { toast('Błąd: ' + e.message); }
 }
 
 // ---------- kto zaplacil ----------
 async function togglePayer(personId) {
   const exists = payments.some(x => x.person_id === personId);
-  if (exists) {
-    await db.from('payments').delete().eq('session_id', sessionId).eq('person_id', personId);
-  } else {
+  let amount = null;
+  if (!exists) {
     const t = computeTotals();
     const paidSoFar = payments.reduce((s, x) => s + (Number(x.amount) || 0), 0);
     // napiwek wylozony osobno nie wchodzi do kwoty podpowiadanej platnikowi rachunku
     const tipCovered = tipPayerIds().length ? t.tip : 0;
-    const remaining = Math.max(0, Math.round((t.billTotal - tipCovered - paidSoFar) * 100) / 100);
-    await db.from('payments').insert({ session_id: sessionId, person_id: personId, amount: remaining });
+    amount = Math.max(0, Math.round((t.billTotal - tipCovered - paidSoFar) * 100) / 100);
   }
-  loadAll();
+  try { await api.setPayment(sessionId, personId, amount); synced(); }
+  catch (e) { toast('Błąd: ' + e.message); }
 }
 
 const savePayment = debounce(async (personId, amount) => {
-  await db.from('payments').update({ amount }).eq('session_id', sessionId).eq('person_id', personId);
-  loadAll();
+  try { await api.setPayment(sessionId, personId, amount); synced(); }
+  catch (e) { toast('Błąd: ' + e.message); }
 }, 600);
 
 // ---------- klucz AI (wlasny klucz Gemini per urzadzenie) ----------
@@ -579,7 +568,7 @@ async function analyzePhoto() {
         if (!up.error) {
           const url = SUPABASE_URL + '/storage/v1/object/public/receipts/' + path;
           const urls = Array.isArray(session.receipt_urls) ? session.receipt_urls : [];
-          await db.from('sessions').update({ receipt_urls: [...urls, url] }).eq('id', sessionId);
+          await api.updateSession(sessionId, { receipt_urls: [...urls, url] });
           lastPhoto.stored = true;
         }
       } catch (e2) { console.warn('Nie udalo sie zapisac podgladu paragonu', e2); }
@@ -618,7 +607,6 @@ async function analyzePhoto() {
       const orig = String(it.name || '').trim();
       const shown = String(it.name_pl || '').trim() || orig;
       return {
-        session_id: sessionId,
         name: shown,
         orig_name: orig && orig !== shown ? orig : null,
         qty: it.qty,
@@ -626,18 +614,11 @@ async function analyzePhoto() {
         position: hadItems + idx,
       };
     });
-    let { error } = await db.from('items').insert(rows);
-    if (error && /orig_name/i.test(error.message || '')) {
-      // baza bez migracji - zapisz same nazwy, zeby analiza nie przepadla
-      const plain = rows.map(({ orig_name, ...rest }) => rest);
-      ({ error } = await db.from('items').insert(plain));
-      if (!error) toast('Zapisano bez oryginalnych nazw — uruchom migration-2026-08.sql', 6000);
-    }
-    if (error) throw new Error(error.message);
+    await api.addItems(sessionId, rows);
 
     const extra = await applyReceiptMeta(data, hadItems);
     status.textContent = `✅ Rozpoznano ${parsed.length} pozycji — sprawdź i popraw w razie potrzeby.` + extra;
-    loadAll();
+    synced();
   } catch (err) {
     status.textContent = '❌ ' + err.message;
     showRetry(true);
@@ -667,8 +648,8 @@ async function applyReceiptMeta(data, hadItems) {
   }
 
   if (!Object.keys(patch).length) return '';
-  const { error } = await db.from('sessions').update(patch).eq('id', sessionId);
-  if (error) return '';
+  try { await api.updateSession(sessionId, patch); }
+  catch { return ''; }
   Object.assign(session, patch);
   return ' Ustawiono automatycznie — ' + notes.join(', ') + '.';
 }
@@ -895,9 +876,9 @@ async function toggleTipPayer(personId) {
   const i = tp.indexOf(personId);
   if (i === -1) tp.push(personId); else tp.splice(i, 1);
   session.tip_payers = tp; // od razu, zeby UI nie mrugal przed odswiezeniem
-  const { error } = await db.from('sessions').update({ tip_payers: tp }).eq('id', sessionId);
-  if (error) toast('Nie zapisano — brakuje kolumny tip_payers? Uruchom migration-2026-08.sql', 6000);
-  loadAll();
+  try { await api.updateSession(sessionId, { tip_payers: tp }); }
+  catch { toast('Nie zapisano — brakuje kolumny tip_payers? Uruchom migration-2026-08.sql', 6000); }
+  synced();
 }
 
 // oblicza koszty pozycji + napiwek per osoba

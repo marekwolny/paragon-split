@@ -65,10 +65,9 @@
 
 <script src="config.js"></script>
 <script type="module">
-import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+import * as api from './data.js';
+import { db } from './data.js';
 
-const { SUPABASE_URL, SUPABASE_ANON_KEY } = window.APP_CONFIG;
-const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const $ = (id) => document.getElementById(id);
 
 let user = null;
@@ -112,8 +111,9 @@ async function loadGroups() {
     sel.innerHTML = '<option value="">— zaloguj się, aby zobaczyć swoje wyjazdy —</option>';
     return;
   }
-  const { data, error } = await db.from('groups').select('id,name,created_at').eq('owner', user.id).order('created_at', { ascending: false });
-  if (error) { sel.innerHTML = '<option value="">— błąd: ' + error.message + ' —</option>'; return; }
+  let data;
+  try { data = await api.myGroups(user.id); }
+  catch (e) { sel.innerHTML = '<option value="">— błąd: ' + e.message + ' —</option>'; return; }
   if (!data.length) { sel.innerHTML = '<option value="">— brak wyjazdów na tym koncie —</option>'; return; }
   sel.innerHTML = '<option value="">— wybierz —</option>';
   for (const g of data) {
@@ -124,17 +124,16 @@ async function loadGroups() {
   }
 }
 
-let HAS = { orig_name: false, tip_payers: false };
+// Sprawdzenie kolumn działa tylko dopóki bezpośredni odczyt jest otwarty.
+// Po rls-hardening.sql tabele są zamknięte, a kolumny i tak istnieją (skrypt je dodaje).
 async function checkColumns() {
   const a = await db.from('items').select('orig_name').limit(1);
-  const b = await db.from('sessions').select('tip_payers').limit(1);
-  HAS.orig_name = !a.error;
-  HAS.tip_payers = !b.error;
-  if (!HAS.orig_name || !HAS.tip_payers) {
-    log('⚠️ Baza bez migracji — brakuje: ' + [!HAS.orig_name && 'items.orig_name', !HAS.tip_payers && 'sessions.tip_payers'].filter(Boolean).join(', '), 'warn');
-    log('   Uruchom migration-2026-08.sql w Supabase, inaczej oryginalne nazwy pozycji i płatnicy napiwku nie zostaną zapisani.', 'warn');
+  const missing = a.error && /orig_name/i.test(a.error.message || '');
+  if (missing) {
+    log('⚠️ Baza bez migracji — brakuje items.orig_name.', 'warn');
+    log('   Uruchom migration-2026-08.sql, inaczej oryginalne nazwy pozycji nie zostaną zapisane.', 'warn');
   } else {
-    log('✅ Baza po migracji — komplet kolumn.', 'ok');
+    log('✅ Kolumny na miejscu.', 'ok');
   }
 }
 
@@ -219,27 +218,15 @@ async function run(groupId, dry, reai) {
   $('log').innerHTML = '';
   log(dry ? '=== PODGLĄD — nic nie zostanie zapisane ===' : '=== ZAPIS NA ŻYWO ===', dry ? 'warn' : 'ok');
 
-  const g = await db.rpc('get_group', { gid: groupId });
-  if (g.error || !g.data || !g.data.length) throw new Error('nie znaleziono wyjazdu');
-  const group = g.data[0];
+  const b = await api.loadGroupBundle(groupId);
+  const group = b.group;
   log('Wyjazd: ' + group.name);
 
-  const [pRes, sRes] = await Promise.all([
-    db.from('people').select('*').eq('group_id', groupId).order('created_at'),
-    db.from('sessions').select('*').eq('group_id', groupId).order('created_at'),
-  ]);
-  const oldPeople = pRes.data || [];
-  const oldSessions = sRes.data || [];
-  const sIds = oldSessions.map(s => s.id);
-  let oldItems = [], oldAsg = [], oldPay = [];
-  if (sIds.length) {
-    const [i, a, p] = await Promise.all([
-      db.from('items').select('*').in('session_id', sIds).order('position'),
-      db.from('assignments').select('*').in('session_id', sIds),
-      db.from('payments').select('*').in('session_id', sIds),
-    ]);
-    oldItems = i.data || []; oldAsg = a.data || []; oldPay = p.data || [];
-  }
+  const oldPeople = b.people;
+  const oldSessions = b.sessions;
+  const oldItems = b.items;
+  const oldAsg = b.assignments;
+  const oldPay = b.payments;
   log(`Osoby: ${oldPeople.length} · paragony: ${oldSessions.length} · pozycje: ${oldItems.length} · przypisania: ${oldAsg.length} · wpłaty: ${oldPay.length}`);
   const withPhoto = oldSessions.filter(s => Array.isArray(s.receipt_urls) && s.receipt_urls.length);
   log(`Paragony ze zdjęciem: ${withPhoto.length} (te pójdą ponownie przez AI)`);
@@ -263,25 +250,25 @@ async function run(groupId, dry, reai) {
   if (!user) throw new Error('zaloguj się — nowy wyjazd musi mieć właściciela');
 
   step('1/5 Zmiana nazwy starego wyjazdu');
-  const rn = await db.from('groups').update({ name: group.name + ' - old' }).eq('id', groupId);
-  if (rn.error) throw new Error('nie udało się zmienić nazwy: ' + rn.error.message);
+  try { await api.renameGroup(groupId, group.name + ' - old'); }
+  catch (e) { throw new Error('nie udało się zmienić nazwy: ' + e.message); }
   log('✔ „' + group.name + ' - old"', 'ok');
 
   step('2/5 Nowy wyjazd');
-  const ng = await db.from('groups').insert({ name: group.name, owner: user.id }).select().single();
-  if (ng.error) throw new Error('nie udało się utworzyć wyjazdu: ' + ng.error.message);
-  const newGroupId = ng.data.id;
+  let newGroupId;
+  try { newGroupId = (await api.createGroup(group.name, user.id)).id; }
+  catch (e) { throw new Error('nie udało się utworzyć wyjazdu: ' + e.message); }
   log('✔ ' + group.name + '  (' + newGroupId + ')', 'ok');
 
   step('3/5 Osoby');
   const personMap = {};
   for (const p of oldPeople) {
-    const row = { group_id: newGroupId, name: p.name };
-    if (p.phone) row.phone = p.phone;
-    const r = await db.from('people').insert(row).select().single();
-    if (r.error) { log('✖ ' + p.name + ': ' + r.error.message, 'err'); continue; }
-    personMap[p.id] = r.data.id;
-    log('✔ ' + p.name, 'ok');
+    try {
+      const np = await api.addPerson({ groupId: newGroupId, name: p.name });
+      personMap[p.id] = np.id;
+      if (p.phone) await api.updatePerson(np.id, { phone: p.phone }).catch(() => {});
+      log('✔ ' + p.name, 'ok');
+    } catch (e) { log('✖ ' + p.name + ': ' + e.message, 'err'); }
   }
 
   step('4/5 Paragony');
@@ -294,20 +281,19 @@ async function run(groupId, dry, reai) {
     const sAsg = oldAsg.filter(a => a.session_id === s.id);
     const sPay = oldPay.filter(p => p.session_id === s.id);
 
-    const sessRow = {
-      group_id: newGroupId,
-      name: s.name,
-      currency: s.currency || 'PLN',
-      fx_rate: s.fx_rate,
-      paid_base: s.paid_base,
-      tip: s.tip || 0,
-      tip_mode: s.tip_mode || 'proportional',
-      category: s.category || 'inne',
-      receipt_urls: Array.isArray(s.receipt_urls) ? s.receipt_urls : [],
-    };
-    const ns = await db.from('sessions').insert(sessRow).select().single();
-    if (ns.error) { log(label + ' ✖ ' + ns.error.message, 'err'); problems.push(label + ': nie utworzono'); continue; }
-    const newSessionId = ns.data.id;
+    let newSessionId;
+    try {
+      newSessionId = (await api.createSession({ groupId: newGroupId, name: s.name })).id;
+      await api.updateSession(newSessionId, {
+        currency: s.currency || 'PLN',
+        fx_rate: s.fx_rate,
+        paid_base: s.paid_base,
+        tip: s.tip || 0,
+        tip_mode: s.tip_mode || 'proportional',
+        category: s.category || 'inne',
+        receipt_urls: Array.isArray(s.receipt_urls) ? s.receipt_urls : [],
+      });
+    } catch (e) { log(label + ' ✖ ' + e.message, 'err'); problems.push(label + ': nie utworzono'); continue; }
 
     // pozycje: z AI (jeśli jest zdjęcie) albo kopia 1:1
     let rows = null;
@@ -320,15 +306,13 @@ async function run(groupId, dry, reai) {
           rows = parsed.map((it, idx) => {
             const orig = String(it.name || '').trim();
             const shown = String(it.name_pl || '').trim() || orig;
-            const row = { session_id: newSessionId, name: shown, qty: it.qty, unit_price: it.unit_price, position: idx };
-            if (HAS.orig_name && orig && orig !== shown) row.orig_name = orig;
-            return row;
+            return { name: shown, orig_name: orig && orig !== shown ? orig : null, qty: it.qty, unit_price: it.unit_price, position: idx };
           });
           const patch = {};
           if (ai.merchant && (!s.name || /^Rachunek(\s+\d+)?$/i.test(String(s.name).trim()))) patch.name = ai.merchant;
           if (ai.category && (!s.category || s.category === 'inne')) patch.category = ai.category;
           if (Object.keys(patch).length) {
-            await db.from('sessions').update(patch).eq('id', newSessionId);
+            await api.updateSession(newSessionId, patch);
             log(label + ' → AI: ' + parsed.length + ' poz.; ' + Object.entries(patch).map(([k, v]) => k + '=' + v).join(', '), 'ok');
           } else {
             log(label + ' → AI: ' + parsed.length + ' poz.', 'ok');
@@ -348,16 +332,13 @@ async function run(groupId, dry, reai) {
       }
     }
     if (!rows) {
-      rows = sItems.map((i, idx) => ({ session_id: newSessionId, name: i.name, qty: i.qty, unit_price: i.unit_price, position: i.position != null ? i.position : idx }));
+      rows = sItems.map((i, idx) => ({ name: i.name, orig_name: i.orig_name || null, qty: i.qty, unit_price: i.unit_price, position: i.position != null ? i.position : idx }));
       if (!photo) log(label + ' → kopia 1:1 (' + rows.length + ' poz.)');
     }
 
-    let ins = rows.length ? await db.from('items').insert(rows).select() : { data: [] };
-    if (ins.error && /orig_name/i.test(ins.error.message || '')) {
-      ins = await db.from('items').insert(rows.map(({ orig_name, ...r }) => r)).select();
-    }
-    if (ins.error) { log(label + ' ✖ pozycje: ' + ins.error.message, 'err'); problems.push(label + ': pozycje'); continue; }
-    const newItems = ins.data || [];
+    let newItems;
+    try { newItems = await api.addItems(newSessionId, rows); }
+    catch (e) { log(label + ' ✖ pozycje: ' + e.message, 'err'); problems.push(label + ': pozycje'); continue; }
 
     // przypisania: mapowanie starych pozycji na nowe
     const map = matchItems(sItems, newItems);
@@ -366,11 +347,11 @@ async function run(groupId, dry, reai) {
     for (const a of sAsg) {
       const ni = map[a.item_id], np = personMap[a.person_id];
       if (!ni || !np) { lost++; continue; }
-      asgRows.push({ item_id: ni, person_id: np, session_id: newSessionId, shares: a.shares || 1 });
+      asgRows.push({ item_id: ni, person_id: np, shares: a.shares || 1 });
     }
     if (asgRows.length) {
-      const ra = await db.from('assignments').insert(asgRows);
-      if (ra.error) { log('   ✖ przypisania: ' + ra.error.message, 'err'); problems.push(label + ': przypisania'); }
+      try { await api.addAssignments(newSessionId, asgRows); }
+      catch (e) { log('   ✖ przypisania: ' + e.message, 'err'); problems.push(label + ': przypisania'); }
     }
     if (lost) {
       log('   ⚠️ ' + lost + ' przypisań bez pary — przypisz ręcznie', 'warn');
@@ -378,12 +359,10 @@ async function run(groupId, dry, reai) {
     }
 
     // wpłaty
-    const payRows = sPay
-      .filter(p => personMap[p.person_id])
-      .map(p => ({ session_id: newSessionId, person_id: personMap[p.person_id], amount: p.amount }));
-    if (payRows.length) {
-      const rp = await db.from('payments').insert(payRows);
-      if (rp.error) { log('   ✖ wpłaty: ' + rp.error.message, 'err'); problems.push(label + ': wpłaty'); }
+    for (const p of sPay) {
+      if (!personMap[p.person_id]) continue;
+      try { await api.setPayment(newSessionId, personMap[p.person_id], Number(p.amount) || 0); }
+      catch (e) { log('   ✖ wpłata: ' + e.message, 'err'); problems.push(label + ': wpłaty'); }
     }
   }
 
