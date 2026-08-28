@@ -127,11 +127,18 @@ export function createGroup(name, ownerId) {
   });
 }
 
-export function renameGroup(gid, name) {
-  return call('rename_group', { gid, p_name: name }, async () => {
+export async function renameGroup(gid, name) {
+  await call('rename_group', { gid, p_name: name }, async () => {
     const r = await db.from('groups').update({ name }).eq('id', gid);
     if (r.error) throw new Error(r.error.message);
   });
+  // UPDATE odfiltrowany przez RLS nie zglasza bledu, tylko cicho nie rusza zadnego wiersza,
+  // wiec sprawdzamy, czy nazwa faktycznie sie zmienila
+  const back = await db.rpc('get_group', { gid });
+  const got = back.data && back.data[0] && back.data[0].name;
+  if (got !== undefined && got !== name) {
+    throw new Error('nazwa nie zapisala sie w bazie (nadal „' + got + '") — sprawdz uprawnienia do tabeli groups');
+  }
 }
 
 // ---------- osoby ----------

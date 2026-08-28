@@ -1,5 +1,5 @@
 // Prosty service worker: statyczne pliki z cache (fallback offline), API zawsze z sieci
-const CACHE = 'paragonsplit-v6';
+const CACHE = 'paragonsplit-v7';
 const STATIC = ['/', '/index.html', '/style.css', '/app.js', '/data.js', '/version.js', '/config.js', '/i18n.js', '/manifest.json', '/icon-192.png', '/icon-512.png', '/group.html', '/group.js'];
 
 self.addEventListener('install', (e) => {

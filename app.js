@@ -116,9 +116,9 @@ function visitedGroups() {
   try { return JSON.parse(localStorage.getItem('visitedGroups') || '[]'); } catch { return []; }
 }
 
+let groupsSeq = 0;
 async function renderGroupsList() {
   const box = $('groups-list');
-  box.innerHTML = '';
 
   // lista grup widoczna tylko po zalogowaniu
   if (!currentUser) {
@@ -126,7 +126,12 @@ async function renderGroupsList() {
     return;
   }
 
+  // renderAuth() wola sie dwa razy (getUser + onAuthStateChange), wiec bez tego licznika
+  // oba przebiegi dopisywaly sie do listy i grupy dublowaly sie na ekranie
+  const seq = ++groupsSeq;
   const mine = await api.myGroups(currentUser.id).catch(() => []);
+  if (seq !== groupsSeq) return;
+  box.innerHTML = '';
   const seen = new Set(mine.map(g => g.id));
   const visited = visitedGroups().filter(g => !seen.has(g.id));
   const all = [...mine, ...visited.map(v => ({ ...v, visited: true }))];
