@@ -197,11 +197,19 @@ function tipPayerIds() {
 // ile kazda osoba faktycznie wylozyla: wplaty + jej czesc napiwku
 function paidByPerson() {
   const paid = {};
+  const hasRow = new Set();
   for (const p of people) paid[p.id] = 0;
-  for (const pay of payments) if (paid[pay.person_id] !== undefined) paid[pay.person_id] += Number(pay.amount) || 0;
+  for (const pay of payments) {
+    if (paid[pay.person_id] === undefined) continue;
+    paid[pay.person_id] += Number(pay.amount) || 0;
+    hasRow.add(pay.person_id);
+  }
+  // Wpisana wplata to CALA gotowka, ktora ktos wylozyl — razem z napiwkiem.
+  // Dlatego napiwek doliczamy osobno tylko tym, ktorzy nie maja wpisanej wplaty;
+  // inaczej osobie, ktora zaplacila caly rachunek, napiwek liczylby sie dwa razy.
   const tp = tipPayerIds();
   const tip = Number(session.tip) || 0;
-  if (tp.length && tip > 0) for (const id of tp) paid[id] += tip / tp.length;
+  if (tp.length && tip > 0) for (const id of tp) if (!hasRow.has(id)) paid[id] += tip / tp.length;
   return paid;
 }
 const fmtC = (n) => fmt(n) + ' ' + (cur() === 'PLN' ? 'zł' : cur());
@@ -508,10 +516,10 @@ async function togglePayer(personId) {
   let amount = null;
   if (!exists) {
     const t = computeTotals();
-    const paidSoFar = payments.reduce((s, x) => s + (Number(x.amount) || 0), 0);
-    // napiwek wylozony osobno nie wchodzi do kwoty podpowiadanej platnikowi rachunku
-    const tipCovered = tipPayerIds().length ? t.tip : 0;
-    amount = Math.max(0, Math.round((t.billTotal - tipCovered - paidSoFar) * 100) / 100);
+    const paid = paidByPerson();
+    let others = 0;
+    for (const p of people) if (p.id !== personId) others += paid[p.id] || 0;
+    amount = Math.max(0, Math.round((t.billTotal - others) * 100) / 100);
   }
   try { await api.setPayment(sessionId, personId, amount); synced(); }
   catch (e) { toast('Błąd: ' + e.message); }

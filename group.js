@@ -291,9 +291,11 @@ function sessionTotals(s) {
   const paid = {};
   for (const pay of sPay) paid[pay.person_id] = (paid[pay.person_id] || 0) + (Number(pay.amount) || 0);
   // kto wylozyl napiwek (moze byc kilka osob, dzielone po rowno)
+  // ta sama regula co na ekranie paragonu: wpisana wplata zawiera juz napiwek,
+  // wiec doliczamy go tylko tym platnikom napiwku, ktorzy nie maja wpisanej wplaty
   const tipPayers = (Array.isArray(s.tip_payers) ? s.tip_payers : []).filter(id => people.some(p => p.id === id));
   if (tipPayers.length && tip > 0) {
-    for (const id of tipPayers) paid[id] = (paid[id] || 0) + tip / tipPayers.length;
+    for (const id of tipPayers) if (paid[id] === undefined) paid[id] = tip / tipPayers.length;
   }
 
   return { owed, paid, unassigned, itemsTotal, tip, rate, currency: s.currency || 'PLN' };

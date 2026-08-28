@@ -71,7 +71,7 @@
     '— do zapłaty': '— owes',
     '🔄 Spróbuj ponownie': '🔄 Try again',
     'Kto wyłożył napiwek?': 'Who paid the tip?',
-    '— można zaznaczyć kilka osób, kwota dzieli się między nie po równo': '— you can pick several people, the amount is split equally between them',
+    '— można zaznaczyć kilka osób, kwota dzieli się między nie po równo. Jeśli ktoś ma wpisaną wpłatę w sekcji 5, przyjmujemy, że napiwek już w niej jest.': '— you can pick several people, split equally between them. If someone has an amount in section 5, we assume the tip is already included there.',
     'Napiwek wyłożyli': 'Tip paid by',
     'Usuń osobę': 'Remove person',
     'Nazwa z paragonu — dotknij, aby jej użyć': 'Name as printed on the receipt — tap to use it',
