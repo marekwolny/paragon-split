@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ParagonSplit — panel</title>
+<meta name="theme-color" content="#4f46e5">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+<style>
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+  .tile { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px; text-align: center; }
+  .tile b { display: block; font-size: 20px; line-height: 1.3; }
+  .tile span { font-size: 11px; color: var(--muted); }
+  table.adm { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.adm th { text-align: left; font-weight: 600; color: var(--muted); font-size: 11px; padding: 6px 6px 6px 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.adm td { padding: 7px 6px 7px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.adm tr:last-child td { border-bottom: none; }
+  .nowrap { white-space: nowrap; }
+  .dim { color: var(--muted); }
+  .badge { background: var(--accent-light); color: var(--accent); border-radius: 999px; padding: 1px 7px; font-size: 10.5px; font-weight: 600; }
+  .scroll { overflow-x: auto; }
+  .act-line { padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  .act-line:last-child { border-bottom: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🛠️ Panel</h1>
+  <div class="header-btns">
+    <a href="index.html" class="btn-small home-btn">🏠</a>
+    <button id="btn-refresh" class="btn-small">↻</button>
+  </div>
+</header>
+
+<main>
+  <section class="card" id="auth-card">
+    <div id="auth-out">
+      <p class="muted small">Panel jest dostępny tylko dla kont z listy administratorów.</p>
+      <button id="btn-login" class="btn-primary">Zaloguj przez Google</button>
+    </div>
+    <div id="auth-in" class="hidden">
+      <div class="row space-between">
+        <span id="auth-email" class="small"></span>
+        <button id="btn-logout" class="btn-small">Wyloguj</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="denied" class="card hidden">
+    <p class="warn">⛔ To konto nie ma dostępu do panelu.</p>
+    <p class="muted small">Dostęp nadaje się wpisem w tabeli <code>admins</code> w Supabase.</p>
+  </div>
+
+  <div id="panel" class="hidden">
+    <section class="card">
+      <h2>W liczbach</h2>
+      <div id="tiles" class="tiles"></div>
+      <p id="stamp" class="muted small"></p>
+    </section>
+
+    <section class="card">
+      <h2>Konta i logowania</h2>
+      <div class="scroll"><table class="adm" id="t-users"></table></div>
+    </section>
+
+    <section class="card">
+      <h2>Wyjazdy</h2>
+      <div class="scroll"><table class="adm" id="t-groups"></table></div>
+    </section>
+
+    <section class="card">
+      <h2>Ostatnie rachunki</h2>
+      <div class="scroll"><table class="adm" id="t-sessions"></table></div>
+    </section>
+
+    <section class="card">
+      <h2>Aktywność</h2>
+      <div id="activity"></div>
+    </section>
+  </div>
+</main>
+
+<div id="toast" class="hidden"></div>
+
+<script src="config.js"></script>
+<script src="version.js"></script>
+<script type="module">
+import { db } from './data.js';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmt = (n) => (Math.round((Number(n) || 0) * 100) / 100).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function when(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso), diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 90) return 'przed chwilą';
+  if (diff < 3600) return Math.round(diff / 60) + ' min temu';
+  if (diff < 86400) return Math.round(diff / 3600) + ' godz. temu';
+  if (diff < 86400 * 30) return Math.round(diff / 86400) + ' dni temu';
+  return d.toLocaleDateString('pl-PL');
+}
+const stamp = (iso) => iso ? new Date(iso).toLocaleString('pl-PL') : '—';
+
+function table(el, cols, rows, cell) {
+  if (!rows.length) { el.innerHTML = '<tr><td class="dim">— pusto —</td></tr>'; return; }
+  el.innerHTML = '<tr>' + cols.map(c => '<th>' + esc(c) + '</th>').join('') + '</tr>'
+    + rows.map(r => '<tr>' + cell(r).map(v => '<td>' + v + '</td>').join('') + '</tr>').join('');
+}
+
+$('btn-login').onclick = async () => {
+  const { error } = await db.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.href } });
+  if (error) alert('Błąd logowania: ' + error.message);
+};
+$('btn-logout').onclick = async () => { await db.auth.signOut(); location.reload(); };
+$('btn-refresh').onclick = () => load();
+
+let user = null;
+
+(async function init() {
+  const { data } = await db.auth.getUser();
+  user = data.user || null;
+  $('auth-out').classList.toggle('hidden', !!user);
+  $('auth-in').classList.toggle('hidden', !user);
+  if (user) $('auth-email').textContent = '👤 ' + (user.email || '');
+  if (user) load();
+})();
+
+async function load() {
+  if (!user) return;
+  const { data, error } = await db.rpc('admin_overview');
+  if (error) {
+    $('panel').classList.add('hidden');
+    $('denied').classList.remove('hidden');
+    if (!/brak dostępu/i.test(error.message || '')) {
+      $('denied').querySelector('.warn').textContent = '⛔ ' + error.message;
+    }
+    return;
+  }
+  $('denied').classList.add('hidden');
+  $('panel').classList.remove('hidden');
+  render(data);
+}
+
+function render(d) {
+  const s = d.stats || {};
+  $('tiles').innerHTML = [
+    ['Konta', s.users], ['Wyjazdy', s.groups], ['Rachunki', s.sessions],
+    ['Pozycje', s.items], ['Osoby', s.people], ['Wpłaty', s.payments],
+  ].map(([k, v]) => `<div class="tile"><b>${v ?? 0}</b><span>${k}</span></div>`).join('');
+  $('stamp').textContent = 'Stan na ' + stamp(d.generated_at);
+
+  table($('t-users'), ['Konto', 'Ostatnie logowanie', 'Założone', 'Wyjazdy'], d.users || [], u => [
+    esc(u.email) + (u.is_admin ? ' <span class="badge">admin</span>' : ''),
+    `<span class="nowrap">${esc(when(u.last_sign_in_at))}</span><br><span class="dim nowrap">${esc(stamp(u.last_sign_in_at))}</span>`,
+    `<span class="dim nowrap">${esc(stamp(u.created_at))}</span>`,
+    u.groups,
+  ]);
+
+  table($('t-groups'), ['Wyjazd', 'Właściciel', 'Rachunki', 'Osoby', 'Utworzony'], d.groups || [], g => [
+    `<a href="group.html?g=${esc(g.id)}">${esc(g.name)}</a>`,
+    `<span class="dim">${esc(g.owner_email || '—')}</span>`,
+    g.sessions, g.people,
+    `<span class="dim nowrap">${esc(when(g.created_at))}</span>`,
+  ]);
+
+  table($('t-sessions'), ['Rachunek', 'Wyjazd', 'Poz.', 'Suma', 'Kiedy'], d.recent_sessions || [], r => [
+    `<a href="index.html?s=${esc(r.id)}">${esc(r.name || 'Rachunek')}</a>`,
+    `<span class="dim">${esc(r.group_name || '— bez grupy —')}</span>`,
+    r.items,
+    `<span class="nowrap">${fmt(r.total)} ${esc(r.currency || 'PLN')}</span>`,
+    `<span class="dim nowrap">${esc(when(r.created_at))}</span>`,
+  ]);
+
+  const act = d.recent_activity || [];
+  $('activity').innerHTML = act.length
+    ? act.map(a => `<div class="act-line"><span class="dim nowrap">${esc(stamp(a.created_at))}</span> · <span class="dim">${esc(a.group_name || '')}</span> — ${esc(a.text)}</div>`).join('')
+    : '<p class="muted small">— brak wpisów —</p>';
+}
+</script>
+</body>
+</html>

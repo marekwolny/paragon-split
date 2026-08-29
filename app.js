@@ -109,7 +109,26 @@ async function renderAuth(user) {
   $('auth-logged-out').classList.toggle('hidden', !!user);
   $('auth-logged-in').classList.toggle('hidden', !user);
   if (user) $('auth-email').textContent = '👤 ' + (user.email || 'zalogowano');
+  if (user) showAdminLink();
   renderGroupsList();
+}
+
+// link do panelu widoczny tylko dla kont z tabeli `admins` — o tym, kto nim jest,
+// decyduje baza (funkcja is_admin), nie przegladarka
+let adminLinkShown = false;
+async function showAdminLink() {
+  if (adminLinkShown) return;
+  const { data, error } = await db.rpc('is_admin');
+  if (error || !data) return;
+  adminLinkShown = true;
+  const btns = document.querySelector('.header-btns');
+  if (!btns) return;
+  const a = document.createElement('a');
+  a.className = 'btn-small';
+  a.href = 'admin.html';
+  a.textContent = '🛠️';
+  a.title = 'Panel administracyjny';
+  btns.prepend(a);
 }
 
 function visitedGroups() {
