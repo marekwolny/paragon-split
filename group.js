@@ -231,12 +231,13 @@ async function removeReceipt(id) {
 }
 
 // ---------- splaty ----------
-async function markSettled(fromId, toId, amount) {
+async function markSettled(fromId, toId, amount, currency) {
+  const cur = currency || 'PLN';
   const from = people.find(p => p.id === fromId), to = people.find(p => p.id === toId);
-  if (!confirm(`Potwierdzić: ${from.name} oddał(a) ${to.name} ${fmt(amount)} zł?`)) return;
+  if (!confirm(`Potwierdzić: ${from.name} oddał(a) ${to.name} ${money(amount, cur)}?`)) return;
   try {
-    await api.addSettlement(groupId, fromId, toId, Math.round(amount * 100) / 100);
-    logActivity(`oznaczył(a) spłatę: ${from.name} → ${to.name} ${fmt(amount)} zł ✓`);
+    await api.addSettlement(groupId, fromId, toId, Math.round(amount * 100) / 100, cur);
+    logActivity(`oznaczył(a) spłatę: ${from.name} → ${to.name} ${money(amount, cur)} ✓`);
     synced();
   } catch (e) { toast('Błąd: ' + e.message); }
 }
@@ -302,34 +303,63 @@ function sessionTotals(s) {
 }
 
 // agregacja calego wyjazdu w PLN
-function groupTotals() {
-  const owedPln = {}, paidPln = {};
-  for (const p of people) { owedPln[p.id] = 0; paidPln[p.id] = 0; }
-  const missingRate = [];
-  let unassignedPln = 0;
-  let billPln = 0; // wszystko, co widnieje na paragonach (razem z pozycjami niczyimi)
+// ---------- waluty rozliczane osobno ----------
+// Domyslnie wszystko idzie na PLN. Waluty wypisane w group.settle_currencies zostaja
+// nieprzeliczone i dostaja wlasne, niezalezne rozliczenie.
 
-  for (const s of sessions) {
+const money = (n, cur) => fmt(n) + ' ' + (cur === 'PLN' ? 'zł' : cur);
+
+function currenciesUsed() {
+  return [...new Set(sessions.map(s => s.currency || 'PLN'))].filter(c => c !== 'PLN').sort();
+}
+function keptCurrencies() {
+  const raw = group && group.settle_currencies;
+  const used = currenciesUsed();
+  return (Array.isArray(raw) ? raw : []).filter(c => typeof c === 'string' && used.indexOf(c) !== -1);
+}
+function isKept(cur) { return keptCurrencies().indexOf(cur) !== -1; }
+
+// lista koszykow: PLN (wszystko przeliczane) + po jednym na kazda walute trzymana osobno
+function buckets() {
+  const out = [{ currency: 'PLN', sessions: sessions.filter(s => !isKept(s.currency || 'PLN')) }];
+  for (const c of keptCurrencies()) {
+    const ss = sessions.filter(s => (s.currency || 'PLN') === c);
+    if (ss.length) out.push({ currency: c, sessions: ss });
+  }
+  return out.filter(b => b.sessions.length || b.currency === 'PLN');
+}
+
+function bucketTotals(bucket) {
+  const owed = {}, paid = {};
+  for (const p of people) { owed[p.id] = 0; paid[p.id] = 0; }
+  const missingRate = [];
+  let unassigned = 0, bill = 0;
+
+  for (const s of bucket.sessions) {
     const t = sessionTotals(s);
-    if (!t.rate) { if (t.itemsTotal > 0) missingRate.push(s); continue; }
-    for (const pid in t.owed) if (owedPln[pid] !== undefined) owedPln[pid] += t.owed[pid] * t.rate;
-    for (const pid in t.paid) if (paidPln[pid] !== undefined) paidPln[pid] += t.paid[pid] * t.rate;
-    unassignedPln += t.unassigned * t.rate;
-    billPln += (t.itemsTotal + t.tip) * t.rate;
+    // w swojej wlasnej walucie nie ma czego przeliczac
+    const rate = bucket.currency === 'PLN' ? t.rate : 1;
+    if (!rate) { if (t.itemsTotal > 0) missingRate.push(s); continue; }
+    for (const pid in t.owed) if (owed[pid] !== undefined) owed[pid] += t.owed[pid] * rate;
+    for (const pid in t.paid) if (paid[pid] !== undefined) paid[pid] += t.paid[pid] * rate;
+    unassigned += t.unassigned * rate;
+    bill += (t.itemsTotal + t.tip) * rate;
   }
-  // splaty: kto oddal, temu rosnie "zaplacone"; kto dostal, temu maleje
+  // splaty tylko te oddane w walucie tego koszyka
   for (const st of settlements) {
+    if ((st.currency || 'PLN') !== bucket.currency) continue;
     const amt = Number(st.amount) || 0;
-    if (paidPln[st.from_person] !== undefined) paidPln[st.from_person] += amt;
-    if (paidPln[st.to_person] !== undefined) paidPln[st.to_person] -= amt;
+    if (paid[st.from_person] !== undefined) paid[st.from_person] += amt;
+    if (paid[st.to_person] !== undefined) paid[st.to_person] -= amt;
   }
-  return { owedPln, paidPln, unassignedPln, missingRate, billPln };
+  return { currency: bucket.currency, owed, paid, unassigned, bill, missingRate };
 }
 
 // wydatki wg kategorii (PLN)
 function categoryTotals() {
   const out = {};
   for (const s of sessions) {
+    if (isKept(s.currency || 'PLN')) continue; // walutach rozliczanych osobno nie mieszamy do zlotowek
     const t = sessionTotals(s);
     if (!t.rate) continue;
     const cat = s.category || 'inne';
@@ -557,6 +587,13 @@ function renderCatChart() {
     row.innerHTML = `<span class="cat-label">${CATS[cat] || '📦'} ${esc(t(cat))}</span><div class="cat-track"><div class="cat-bar" style="width:${Math.max(4, Math.round(val / max * 100))}%"></div></div><span class="cat-val">${fmt(val)} zł</span>`;
     box.appendChild(row);
   }
+  const kept = keptCurrencies();
+  if (kept.length) {
+    const note = document.createElement('p');
+    note.className = 'muted small';
+    note.textContent = t('nie obejmuje') + ': ' + kept.join(', ') + ' — ' + t('rozliczane osobno');
+    box.appendChild(note);
+  }
 }
 
 function renderActivity() {
@@ -573,71 +610,120 @@ function renderActivity() {
   }
 }
 
+function renderCurrencyChoice() {
+  const wrap = $('cur-choice'), list = $('cur-list'), scope = $('settle-scope');
+  if (!wrap || !list) return;
+  const used = currenciesUsed();
+  if (!used.length) {
+    wrap.classList.add('hidden');
+    if (scope) scope.textContent = '(' + t('wszystko w PLN') + ')';
+    return;
+  }
+  wrap.classList.remove('hidden');
+  list.innerHTML = '';
+  for (const c of used) {
+    const kept = isKept(c);
+    const chip = document.createElement('button');
+    chip.className = 'chip assignable' + (kept ? '' : ' on');
+    chip.textContent = kept ? c + ' — ' + t('osobno') : c + ' → PLN';
+    chip.title = kept ? t('Kliknij, aby przeliczać na złotówki') : t('Kliknij, aby rozliczyć w tej walucie');
+    chip.onclick = () => toggleCurrency(c);
+    list.appendChild(chip);
+  }
+  const kept = keptCurrencies();
+  if (scope) scope.textContent = '(' + (kept.length ? 'PLN + ' + kept.join(', ') + ' ' + t('osobno') : t('wszystko w PLN')) + ')';
+}
+
+async function toggleCurrency(c) {
+  const kept = keptCurrencies();
+  const i = kept.indexOf(c);
+  if (i === -1) kept.push(c); else kept.splice(i, 1);
+  group.settle_currencies = kept; // od razu, zeby chip nie mrugal
+  try { await api.updateGroup(groupId, { settle_currencies: kept }); synced(); }
+  catch (e) { toast('Nie zapisano — uruchom settle-currencies.sql (' + e.message + ')', 6000); }
+}
+
 function renderGroupSummary() {
   const box = $('group-summary');
   const setBox = $('group-settlement');
   box.innerHTML = '';
   setBox.innerHTML = '';
+  renderCurrencyChoice();
 
   if (!people.length || !sessions.length) {
     box.innerHTML = '<p class="muted small">' + t('Dodaj uczestników i paragony, aby zobaczyć rozliczenie.') + '</p>';
     return;
   }
 
-  const g = groupTotals();
-  let grandOwed = 0, grandPaid = 0;
-  for (const p of people) {
-    grandOwed += g.owedPln[p.id];
-    grandPaid += g.paidPln[p.id];
-    const net = g.paidPln[p.id] - g.owedPln[p.id];
-    const row = document.createElement('div');
-    row.className = 'summary-row';
-    row.innerHTML = `<span>${esc(p.name)}<span class="details">${t('wydał')} ${fmt(g.owedPln[p.id])} zł · ${t('zapłacił')} ${fmt(g.paidPln[p.id])} zł</span></span><strong class="${net < -0.005 ? 'neg' : net > 0.005 ? 'pos' : ''}">${net > 0.005 ? '+' : ''}${fmt(net)} zł</strong>`;
-    box.appendChild(row);
-  }
-  const totalRow = document.createElement('div');
-  totalRow.className = 'summary-row total';
-  // suma z paragonow (ta sama, co w wykresie kategorii); pozycje niczyje sa w niej zawarte
-  const detail = g.unassignedPln > 0.005 ? `<span class="details">${t('rozdzielone')} ${fmt(grandOwed)} zł</span>` : '';
-  totalRow.innerHTML = `<span>${t('Razem wydatki')}</span><span class="amount-col"><span>${fmt(g.billPln)} zł</span>${detail}</span>`;
-  box.appendChild(totalRow);
+  const list = buckets().filter(b => b.sessions.length);
+  const many = list.length > 1;
 
-  if (g.unassignedPln > 0.005) {
-    const w = document.createElement('p');
-    w.className = 'warn';
-    w.textContent = `⚠️ ${t('Nieprzypisane pozycje')}: ${fmt(g.unassignedPln)} zł`;
-    box.appendChild(w);
-  }
-  for (const s of g.missingRate) {
-    const w = document.createElement('p');
-    w.className = 'warn';
-    w.textContent = `⚠️ „${s.name || 'Rachunek'}" (${s.currency}) pominięty — brak kursu. Otwórz go i podaj kurs lub kwotę w PLN.`;
-    box.appendChild(w);
-  }
-  if (Math.abs(grandPaid - g.billPln) > api.billTolerance(g.billPln) && grandPaid > 0) {
-    const w = document.createElement('p');
-    w.className = 'warn';
-    w.textContent = `⚠️ Suma wpłat (${fmt(grandPaid)} zł) ≠ suma z paragonów (${fmt(g.billPln)} zł) — sprawdź "kto zapłacił" w paragonach.`;
-    box.appendChild(w);
-  }
+  for (const bucket of list) {
+    const g = bucketTotals(bucket);
+    const cur = g.currency;
 
-  const transfers = computeTransfers(g);
-  if (transfers.length) {
-    const h = document.createElement('h3');
-    h.className = 'settle-title';
-    h.textContent = t('Kto komu oddaje');
-    setBox.appendChild(h);
-    for (const tr of transfers) {
-      const toPerson = people.find(p => p.name === tr.to);
-      const phone = toPerson && toPerson.phone ? ` <span class="muted small">📱 ${esc(toPerson.phone)}</span>` : '';
+    if (many) {
+      const h = document.createElement('h3');
+      h.className = 'settle-title';
+      h.textContent = cur === 'PLN' ? t('W złotówkach') : t('W walucie') + ' ' + cur;
+      box.appendChild(h);
+    }
+
+    let grandOwed = 0, grandPaid = 0;
+    for (const p of people) {
+      grandOwed += g.owed[p.id];
+      grandPaid += g.paid[p.id];
+      const net = g.paid[p.id] - g.owed[p.id];
       const row = document.createElement('div');
-      row.className = 'settle-row';
-      row.innerHTML = `<span>${esc(tr.from)} → ${esc(tr.to)}${phone}</span><span class="settle-actions"><strong>${fmt(tr.amount)} zł</strong> <button class="btn-small settle-done">${t('✓ oddane')}</button></span>`;
-      row.querySelector('.settle-done').onclick = () => {
-        const fromP = people.find(p => p.name === tr.from);
-        if (fromP && toPerson) markSettled(fromP.id, toPerson.id, tr.amount);
-      };
-      setBox.appendChild(row);
+      row.className = 'summary-row';
+      row.innerHTML = `<span>${esc(p.name)}<span class="details">${t('wydał')} ${money(g.owed[p.id], cur)} · ${t('zapłacił')} ${money(g.paid[p.id], cur)}</span></span>`
+        + `<strong class="${net < -0.005 ? 'neg' : net > 0.005 ? 'pos' : ''}">${net > 0.005 ? '+' : ''}${money(net, cur)}</strong>`;
+      box.appendChild(row);
+    }
+
+    const totalRow = document.createElement('div');
+    totalRow.className = 'summary-row total';
+    const detail = g.unassigned > 0.005 ? `<span class="details">${t('rozdzielone')} ${money(grandOwed, cur)}</span>` : '';
+    totalRow.innerHTML = `<span>${t('Razem wydatki')}</span><span class="amount-col"><span>${money(g.bill, cur)}</span>${detail}</span>`;
+    box.appendChild(totalRow);
+
+    if (g.unassigned > 0.005) {
+      const w = document.createElement('p');
+      w.className = 'warn';
+      w.textContent = `⚠️ ${t('Nieprzypisane pozycje')}: ${money(g.unassigned, cur)}`;
+      box.appendChild(w);
+    }
+    for (const s of g.missingRate) {
+      const w = document.createElement('p');
+      w.className = 'warn';
+      w.textContent = `⚠️ „${s.name || 'Rachunek'}" (${s.currency}) pominięty — brak kursu. Otwórz go i podaj kurs lub kwotę w PLN.`;
+      box.appendChild(w);
+    }
+    if (Math.abs(grandPaid - g.bill) > api.billTolerance(g.bill) && grandPaid > 0) {
+      const w = document.createElement('p');
+      w.className = 'warn';
+      w.textContent = `⚠️ Suma wpłat (${money(grandPaid, cur)}) ≠ suma z paragonów (${money(g.bill, cur)}) — sprawdź "kto zapłacił" w paragonach.`;
+      box.appendChild(w);
+    }
+
+    const transfers = computeTransfers(g);
+    if (transfers.length) {
+      const h = document.createElement('h3');
+      h.className = 'settle-title';
+      h.textContent = t('Kto komu oddaje') + (many ? ' — ' + (cur === 'PLN' ? 'PLN' : cur) : '');
+      setBox.appendChild(h);
+      for (const tr of transfers) {
+        const toPerson = people.find(p => p.name === tr.to);
+        const phone = toPerson && toPerson.phone ? ` <span class="muted small">📱 ${esc(toPerson.phone)}</span>` : '';
+        const row = document.createElement('div');
+        row.className = 'settle-row';
+        row.innerHTML = `<span>${esc(tr.from)} → ${esc(tr.to)}${phone}</span><span class="settle-actions"><strong>${money(tr.amount, cur)}</strong> <button class="btn-small settle-done">${t('✓ oddane')}</button></span>`;
+        row.querySelector('.settle-done').onclick = () => {
+          const fromP = people.find(p => p.name === tr.from);
+          if (fromP && toPerson) markSettled(fromP.id, toPerson.id, tr.amount, cur);
+        };
+        setBox.appendChild(row);
+      }
     }
   }
 
@@ -656,7 +742,7 @@ function renderGroupSummary() {
         if (!f || !to) continue;
         const row = document.createElement('div');
         row.className = 'settle-row settled';
-        row.innerHTML = `<span>✓ ${esc(f.name)} → ${esc(to.name)}</span><span class="settle-actions"><strong>${fmt(Number(st.amount))} zł</strong> <button class="btn-del settle-undo">✕</button></span>`;
+        row.innerHTML = `<span>✓ ${esc(f.name)} → ${esc(to.name)}</span><span class="settle-actions"><strong>${money(Number(st.amount), st.currency || 'PLN')}</strong> <button class="btn-del settle-undo">✕</button></span>`;
         row.querySelector('.settle-undo').onclick = () => undoSettlement(st.id);
         sBox.appendChild(row);
       }
@@ -666,7 +752,6 @@ function renderGroupSummary() {
 
 // ---------- eksport CSV ----------
 function exportCsv() {
-  const t = groupTotals();
   const lines = [];
   const sep = ';';
   lines.push(['Grupa', group.name].join(sep));
@@ -684,17 +769,22 @@ function exportCsv() {
       ts.rate ? (total * ts.rate).toFixed(2).replace('.', ',') : 'brak kursu'
     ].join(sep));
   }
-  lines.push([]);
-  lines.push(['OSOBA', 'Wydal PLN', 'Zaplacil PLN', 'Saldo PLN'].join(sep));
-  for (const p of people) {
-    const net = t.paidPln[p.id] - t.owedPln[p.id];
-    lines.push([p.name, t.owedPln[p.id].toFixed(2).replace('.', ','), t.paidPln[p.id].toFixed(2).replace('.', ','), net.toFixed(2).replace('.', ',')].join(sep));
-  }
-  const transfers = computeTransfers(t);
-  if (transfers.length) {
+  // osobna sekcja na kazdy koszyk walutowy
+  for (const bucket of buckets().filter(b => b.sessions.length)) {
+    const g = bucketTotals(bucket);
+    const cur = g.currency;
     lines.push([]);
-    lines.push(['DO ODDANIA', 'Komu', 'Kwota PLN'].join(sep));
-    for (const tr of transfers) lines.push([tr.from, tr.to, tr.amount.toFixed(2).replace('.', ',')].join(sep));
+    lines.push(['OSOBA', 'Wydal ' + cur, 'Zaplacil ' + cur, 'Saldo ' + cur].join(sep));
+    for (const p of people) {
+      const net = g.paid[p.id] - g.owed[p.id];
+      lines.push([p.name, g.owed[p.id].toFixed(2).replace('.', ','), g.paid[p.id].toFixed(2).replace('.', ','), net.toFixed(2).replace('.', ',')].join(sep));
+    }
+    const transfers = computeTransfers(g);
+    if (transfers.length) {
+      lines.push([]);
+      lines.push(['DO ODDANIA', 'Komu', 'Kwota ' + cur].join(sep));
+      for (const tr of transfers) lines.push([tr.from, tr.to, tr.amount.toFixed(2).replace('.', ',')].join(sep));
+    }
   }
   const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
@@ -706,7 +796,7 @@ function exportCsv() {
 }
 
 function computeTransfers(t) {
-  const nets = people.map(p => ({ name: p.name, net: Math.round((t.paidPln[p.id] - t.owedPln[p.id]) * 100) / 100 }));
+  const nets = people.map(p => ({ name: p.name, net: Math.round(((t.paid[p.id] || 0) - (t.owed[p.id] || 0)) * 100) / 100 }));
   const debtors = nets.filter(x => x.net < -0.005).map(x => ({ ...x, net: -x.net })).sort((a, b) => b.net - a.net);
   const creditors = nets.filter(x => x.net > 0.005).sort((a, b) => b.net - a.net);
   const out = [];
@@ -724,16 +814,22 @@ function computeTransfers(t) {
 
 async function copyGroupSummary() {
   if (!people.length || !sessions.length) return toast('Brak danych');
-  const t = groupTotals();
   const lines = [`🏕️ ${group.name} — rozliczenie wyjazdu`, ''];
-  for (const p of people) {
-    const net = t.paidPln[p.id] - t.owedPln[p.id];
-    lines.push(`${p.name}: wydał ${fmt(t.owedPln[p.id])} zł, zapłacił ${fmt(t.paidPln[p.id])} zł → ${net >= 0 ? 'dostaje' : 'oddaje'} ${fmt(Math.abs(net))} zł`);
-  }
-  const transfers = computeTransfers(t);
-  if (transfers.length) {
-    lines.push('', 'Przelewy:');
-    for (const tr of transfers) lines.push(`  ${tr.from} → ${tr.to}: ${fmt(tr.amount)} zł`);
+  const list = buckets().filter(b => b.sessions.length);
+  for (const bucket of list) {
+    const g = bucketTotals(bucket);
+    const cur = g.currency;
+    if (list.length > 1) lines.push(cur === 'PLN' ? '— w złotówkach —' : '— w walucie ' + cur + ' —');
+    for (const p of people) {
+      const net = g.paid[p.id] - g.owed[p.id];
+      lines.push(`${p.name}: wydał ${money(g.owed[p.id], cur)}, zapłacił ${money(g.paid[p.id], cur)} → ${net >= 0 ? 'dostaje' : 'oddaje'} ${money(Math.abs(net), cur)}`);
+    }
+    const transfers = computeTransfers(g);
+    if (transfers.length) {
+      lines.push('', 'Przelewy' + (list.length > 1 ? ' (' + cur + ')' : '') + ':');
+      for (const tr of transfers) lines.push(`  ${tr.from} → ${tr.to}: ${money(tr.amount, cur)}`);
+    }
+    lines.push('');
   }
   lines.push('', 'Szczegóły: ' + location.href);
   try {

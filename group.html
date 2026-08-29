@@ -81,7 +81,11 @@
   </section>
 
   <section class="card">
-    <h2>Rozliczenie wyjazdu <span class="muted small">(wszystko w PLN)</span></h2>
+    <h2>Rozliczenie wyjazdu <span id="settle-scope" class="muted small">(wszystko w PLN)</span></h2>
+    <div id="cur-choice" class="hidden">
+      <p class="muted small">Waluty w tym wyjeździe — odznacz tę, którą rozliczacie między sobą w niej samej, bez przeliczania na złotówki:</p>
+      <div id="cur-list" class="chips"></div>
+    </div>
     <div id="group-summary"></div>
     <div id="group-settlement"></div>
     <div id="settled-list"></div>

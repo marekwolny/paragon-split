@@ -127,6 +127,14 @@ export function createGroup(name, ownerId) {
   });
 }
 
+// patch: { name?, settle_currencies? }
+export function updateGroup(gid, patch) {
+  return call('update_group', { gid, patch }, async () => {
+    const r = await db.from('groups').update(patch).eq('id', gid);
+    if (r.error) throw new Error(r.error.message);
+  });
+}
+
 export async function renameGroup(gid, name) {
   await call('rename_group', { gid, p_name: name }, async () => {
     const r = await db.from('groups').update({ name }).eq('id', gid);
@@ -297,9 +305,9 @@ export function setPayment(sid, pid, amount) {
   });
 }
 
-export function addSettlement(gid, fromId, toId, amount) {
-  return call('add_settlement', { gid, p_from: fromId, p_to: toId, p_amount: amount }, async () => {
-    const r = await db.from('settlements').insert({ group_id: gid, from_person: fromId, to_person: toId, amount });
+export function addSettlement(gid, fromId, toId, amount, currency = 'PLN') {
+  return call('add_settlement', { gid, p_from: fromId, p_to: toId, p_amount: amount, p_currency: currency }, async () => {
+    const r = await db.from('settlements').insert({ group_id: gid, from_person: fromId, to_person: toId, amount, currency });
     if (r.error) throw new Error(r.error.message);
   });
 }
